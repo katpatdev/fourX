@@ -1,0 +1,33 @@
+{
+  "invoice_number": "OFS/OCT/26/031",
+  "invoice_date": "2026-10-01",
+  "due_date": "2026-10-31",
+  "vendor_name": "Orbit Facility Services",
+  "bill_to": {
+    "name": "Acme Foods Pvt Ltd",
+    "address": "Plot 14, Sector 37, Gurugram, Haryana"
+  },
+  "currency": "INR",
+  "lines": [
+    {
+      "description": "Housekeeping services, October 2026",
+      "quantity": 1,
+      "unit_price": "85000.00",
+      "amount": "85000.00"
+    }
+  ],
+  "subtotal": "85000.00",
+  "taxes": [
+    {
+      "type": "CGST",
+      "rate_percent": 9,
+      "amount": "7650.00"
+    },
+    {
+      "type": "SGST",
+      "rate_percent": 9,
+      "amount": "7650.00"
+    }
+  ],
+  "total": "100300.00"
+}

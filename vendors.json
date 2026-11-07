@@ -1,0 +1,27 @@
+[
+  {
+    "vendor_id": "V-001",
+    "name": "Shree Ganesh Packaging Pvt Ltd",
+    "status": "active",
+    "payment_terms_days": 30
+  },
+  {
+    "vendor_id": "V-002",
+    "name": "Bluefin Logistics LLP",
+    "status": "active",
+    "payment_terms_days": 15
+  },
+  {
+    "vendor_id": "V-003",
+    "name": "Kavya Office Supplies",
+    "status": "active",
+    "payment_terms_days": 30
+  },
+  {
+    "vendor_id": "V-004",
+    "name": "Orbit Facility Services",
+    "status": "blocked",
+    "blocked_reason": "Bank details under verification",
+    "payment_terms_days": 30
+  }
+]

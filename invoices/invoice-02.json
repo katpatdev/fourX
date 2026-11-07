@@ -1,0 +1,34 @@
+{
+  "invoice_number": "BL-88213",
+  "invoice_date": "2026-10-07",
+  "due_date": "2026-10-22",
+  "vendor_name": "Bluefin Logistics LLP",
+  "bill_to": {
+    "name": "Acme Foods Pvt Ltd",
+    "address": "Plot 14, Sector 37, Gurugram, Haryana"
+  },
+  "currency": "INR",
+  "lines": [
+    {
+      "description": "Road freight, Gurugram to Pune (per trip)",
+      "quantity": 2,
+      "unit_price": "28500.00",
+      "amount": "57000.00"
+    },
+    {
+      "description": "Loading and unloading",
+      "quantity": 1,
+      "unit_price": "3000.00",
+      "amount": "3000.00"
+    }
+  ],
+  "subtotal": "60000.00",
+  "taxes": [
+    {
+      "type": "IGST",
+      "rate_percent": 18,
+      "amount": "10800.00"
+    }
+  ],
+  "total": "70800.00"
+}

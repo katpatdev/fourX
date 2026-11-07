@@ -1,0 +1,33 @@
+{
+  "invoice_number": "SGP/26-27/0431",
+  "invoice_date": "2026-10-14",
+  "due_date": "2026-11-13",
+  "vendor_name": "Shree Ganesh Packaging Pvt Ltd",
+  "bill_to": {
+    "name": "Acme Foods Pvt Ltd",
+    "address": "Plot 14, Sector 37, Gurugram, Haryana"
+  },
+  "currency": "INR",
+  "lines": [
+    {
+      "description": "Stretch wrap rolls, 500 mm",
+      "quantity": 60,
+      "unit_price": "310.00",
+      "amount": "18600.00"
+    }
+  ],
+  "subtotal": "18600.00",
+  "taxes": [
+    {
+      "type": "CGST",
+      "rate_percent": 9,
+      "amount": "1674.00"
+    },
+    {
+      "type": "SGST",
+      "rate_percent": 9,
+      "amount": "1674.00"
+    }
+  ],
+  "total": "21948.00"
+}

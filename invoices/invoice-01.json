@@ -1,0 +1,39 @@
+{
+  "invoice_number": "SGP/26-27/0412",
+  "invoice_date": "2026-10-03",
+  "due_date": "2026-11-02",
+  "vendor_name": "Shree Ganesh Packaging Pvt Ltd",
+  "bill_to": {
+    "name": "Acme Foods Pvt Ltd",
+    "address": "Plot 14, Sector 37, Gurugram, Haryana"
+  },
+  "currency": "INR",
+  "lines": [
+    {
+      "description": "Corrugated boxes 12x10x8 in",
+      "quantity": 500,
+      "unit_price": "18.50",
+      "amount": "9250.00"
+    },
+    {
+      "description": "Packing tape rolls, 48 mm",
+      "quantity": 120,
+      "unit_price": "42.00",
+      "amount": "5040.00"
+    }
+  ],
+  "subtotal": "14290.00",
+  "taxes": [
+    {
+      "type": "CGST",
+      "rate_percent": 9,
+      "amount": "1286.10"
+    },
+    {
+      "type": "SGST",
+      "rate_percent": 9,
+      "amount": "1286.10"
+    }
+  ],
+  "total": "16862.20"
+}

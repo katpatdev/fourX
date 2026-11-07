@@ -1,0 +1,6 @@
+[project]
+name = "fourx-take-home"
+version = "0.1.0"
+description = "FourX take-home: a small agent harness"
+requires-python = ">=3.11"
+dependencies = []

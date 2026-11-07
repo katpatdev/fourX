@@ -1,0 +1,45 @@
+{
+  "invoice_number": "KOS-2026-1187",
+  "invoice_date": "2026-10-09",
+  "due_date": "2026-11-08",
+  "vendor_name": "Kavya Office Supplies",
+  "bill_to": {
+    "name": "Acme Foods Pvt Ltd",
+    "address": "Plot 14, Sector 37, Gurugram, Haryana"
+  },
+  "currency": "INR",
+  "lines": [
+    {
+      "description": "A4 paper, 500-sheet reams",
+      "quantity": 40,
+      "unit_price": "265.00",
+      "amount": "10600.00"
+    },
+    {
+      "description": "Whiteboard markers, box of 10",
+      "quantity": 15,
+      "unit_price": "180.00",
+      "amount": "2700.00"
+    },
+    {
+      "description": "Printer toner cartridge",
+      "quantity": 4,
+      "unit_price": "3450.00",
+      "amount": "13800.00"
+    }
+  ],
+  "subtotal": "27100.00",
+  "taxes": [
+    {
+      "type": "CGST",
+      "rate_percent": 9,
+      "amount": "2439.00"
+    },
+    {
+      "type": "SGST",
+      "rate_percent": 9,
+      "amount": "2439.00"
+    }
+  ],
+  "total": "31978.00"
+}
