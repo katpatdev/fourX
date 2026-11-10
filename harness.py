@@ -57,6 +57,7 @@ from invoice_tools import (
     read_invoice,
 )
 from nl_routing import APP_CONTROL_TOOL_NAMES, app_control_declarations
+from run_logging import NullRunLogger, RunLogger
 from storage import (
     ApprovalPendingExists,
     ApprovalUnprocessedExists,
@@ -481,6 +482,7 @@ def run_agent_turn(
     cancel: CancellationToken | None = None,
     user_message: str = "",
     allow_pending_resolution: bool = False,
+    run_logger: RunLogger | None = None,
 ) -> Message:
     """Run the model/tool loop until a final text answer, limit, or approval boundary.
 
@@ -499,6 +501,7 @@ def run_agent_turn(
     if max_model_calls < 1:
         raise ValueError("max_model_calls must be at least 1")
 
+    log = run_logger if run_logger is not None else NullRunLogger(conversation_id)
     token = cancel if cancel is not None else CancellationToken()
     # begin_run shares _active_lock with run_write: waits until any in-flight
     # protected SQLite write finishes, then claims ownership before load.
@@ -536,12 +539,19 @@ def run_agent_turn(
             assert_run_active(conversation_id, token)
             token.check()
 
+            log.emit("model_call_started", message_count=len(conversation.messages))
             try:
                 # SDK / model calls stay outside run_write (must not hold the lock).
                 raw = model(conversation, declarations)
-            except InvalidModelResponse:
+            except InvalidModelResponse as exc:
+                log.emit("model_call_failed", error=str(exc), error_type="InvalidModelResponse")
                 raise
-            except Exception:
+            except Exception as exc:
+                log.emit(
+                    "model_call_failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
                 raise
 
             # Soft pre-check only; durable writes re-validate inside run_write.
@@ -564,6 +574,11 @@ def run_agent_turn(
                 raise RunCancelled("agent turn cancelled")
 
             assistant = _validate_assistant(raw)
+            log.emit(
+                "model_call_completed",
+                has_tool_calls=bool(assistant.tool_calls),
+                tool_count=len(assistant.tool_calls or ()),
+            )
             conversation.add(assistant)
             assistant_index = len(conversation.messages) - 1
             _checkpoint(store, conversation_id, conversation, token)
@@ -586,6 +601,15 @@ def run_agent_turn(
                     )
 
                 call = assistant.tool_calls[call_index]
+                invoice_arg = None
+                if isinstance(call.arguments, dict):
+                    invoice_arg = call.arguments.get("invoice_id")
+                log.emit(
+                    "tool_requested",
+                    tool_name=call.name,
+                    tool_call_id=call.id,
+                    invoice_id=invoice_arg if isinstance(invoice_arg, str) else None,
+                )
                 if call.name != "post_invoice":
                     tool_message = execute_tool_call(
                         call,
@@ -594,6 +618,24 @@ def run_agent_turn(
                         user_message=user_message,
                         turn_state=turn_state,
                     )
+                    try:
+                        payload = json.loads(tool_message.content or "{}")
+                    except json.JSONDecodeError:
+                        payload = {}
+                    if isinstance(payload, dict) and payload.get("ok") is False:
+                        log.emit(
+                            "tool_failed",
+                            tool_name=call.name,
+                            tool_call_id=call.id,
+                            error_type=payload.get("error_type"),
+                        )
+                    else:
+                        log.emit(
+                            "tool_completed",
+                            tool_name=call.name,
+                            tool_call_id=call.id,
+                            ok=True,
+                        )
                     conversation.add(tool_message)
                     _checkpoint(store, conversation_id, conversation, token)
                     call_index += 1
@@ -605,6 +647,12 @@ def run_agent_turn(
                 except _TOOL_ERRORS as exc:
                     conversation.add(_post_invoice_error_message(call, exc))
                     _checkpoint(store, conversation_id, conversation, token)
+                    log.emit(
+                        "tool_failed",
+                        tool_name=call.name,
+                        tool_call_id=call.id,
+                        error_type=type(exc).__name__,
+                    )
                     call_index += 1
                     continue
 
@@ -673,6 +721,19 @@ def run_agent_turn(
 
                 loaded = get_approval(store, stored_approval.approval_id)
                 assert loaded is not None
+                log.emit(
+                    "approval_created",
+                    approval_id=loaded.approval_id,
+                    invoice_id=loaded.invoice_id,
+                    status=loaded.status,
+                )
+                log.emit(
+                    "tool_completed",
+                    tool_name="post_invoice",
+                    tool_call_id=call.id,
+                    ok=True,
+                    status="pending",
+                )
                 raise ApprovalRequired(loaded)
 
         else:
@@ -682,5 +743,8 @@ def run_agent_turn(
 
         assert final is not None
         return final
+    except RunCancelled:
+        log.emit("cancellation_completed", phase="run_agent_turn")
+        raise
     finally:
         end_run(conversation_id, token)

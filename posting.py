@@ -122,10 +122,13 @@ def _entry_matches_details(entry: dict[str, Any], details: dict[str, Any]) -> bo
 
 def list_identifier_ledger_entries(details: dict[str, Any]) -> list[dict[str, Any]]:
     """All ledger rows for vendor_id + invoice_number (no detail filter)."""
-    return ledger.entries(
-        vendor_id=details["vendor_id"],
-        invoice_number=details["invoice_number"],
-    )
+    from ledger_guard import ledger_lock
+
+    with ledger_lock():
+        return ledger.entries(
+            vendor_id=details["vendor_id"],
+            invoice_number=details["invoice_number"],
+        )
 
 
 def find_matching_ledger_entries(details: dict[str, Any]) -> list[dict[str, Any]]:
@@ -400,7 +403,12 @@ def post_approved(
     try:
         if cancel_token is not None and cancel_token.cancelled:
             return reconcile_posting(store, conversation_id, approval_id)
-        returned_id = ledger.post(**post_kwargs)
+        from ledger_guard import ledger_lock
+
+        # Hold the process ledger lock only around the ERP call — never across
+        # provider SDK waits. Path must already be the intended session ledger.
+        with ledger_lock():
+            returned_id = ledger.post(**post_kwargs)
     except RunCancelled:
         return reconcile_posting(store, conversation_id, approval_id)
     except Exception:

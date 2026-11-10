@@ -188,7 +188,11 @@ def prepare_post(invoice_id: str) -> dict[str, Any]:
     vendor_id = vendor["vendor_id"]
     invoice_number = invoice["invoice_number"]
     # Fail closed: any ledger lookup error must not look like "no duplicate".
-    existing = ledger.entries(vendor_id=vendor_id, invoice_number=invoice_number)
+    # Serialize against CLI snapshot/reset path swaps (process-local).
+    from ledger_guard import ledger_lock
+
+    with ledger_lock():
+        existing = ledger.entries(vendor_id=vendor_id, invoice_number=invoice_number)
     if existing:
         entry_id = existing[0].get("entry_id", "unknown")
         raise DuplicateInvoice(

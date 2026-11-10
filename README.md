@@ -81,6 +81,18 @@ and posting reservations live in the conversation SQLite DB (`--db`, default
 - **Blocked vendors and duplicates** are enforced in application code, not only
   in prompts.
 
+## Diagnostic logging
+
+Each interactive CLI launch gets a unique `run_id` and an append-only JSONL file
+under `logs/` (gitignored). Use `/run`, `/logs`, and `/snapshot` during a session.
+`/reset-demo` starts a **new** isolated conversation + ledger under `tmp/demo-runs/`
+without deleting previous databases or log files.
+
+```bash
+python cli.py -c demo                  # logging on (default --log-dir logs)
+python cli.py -c demo --no-logs        # disable JSONL diagnostics
+```
+
 ## Offline tests
 
 ```bash

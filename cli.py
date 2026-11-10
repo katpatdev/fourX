@@ -16,11 +16,13 @@ handle provider, approval, posting, stop, and status. The CLI never calls
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -58,7 +60,9 @@ from posting import (
     post_approved,
     reconcile_posting,
 )
+from ledger_guard import set_ledger_path
 from providers import make_model
+from run_logging import NullRunLogger, RunLogger, new_run_id
 from storage import ConversationNotFound, ConversationStore, StoredApproval
 
 HELP_TEXT = """\
@@ -73,6 +77,10 @@ Commands:
   /reconcile [approval_id]      Reconcile posting/posting_uncertain (never posts)
   /pending                      Show unresolved pending approval
   /status                       Provider, approvals, reservations overview
+  /run                          Show current diagnostic run ID and log path
+  /logs                         Show recent sanitized diagnostic events
+  /snapshot                     Show conversation, approval and ledger summary
+  /reset-demo                   Start a new isolated demo conversation + ledger
   /stop                         Cancel the active turn; you may ask another question immediately
   /quit                         Exit promptly (state already durable on disk)
 
@@ -83,6 +91,10 @@ A cancelled model worker may still await an SDK response; it cannot overwrite ne
 """
 
 ModelFactory = Callable[[str], Any]
+
+
+def json_dumps_safe(payload: Any) -> str:
+    return json.dumps(payload, indent=2, default=str, ensure_ascii=False)
 
 
 @dataclass
@@ -208,6 +220,8 @@ class FourXCLI:
         stdin: TextIO | None = None,
         stdout: TextIO | None = None,
         ledger_db: Path | None = None,
+        run_logger: RunLogger | None = None,
+        log_dir: str | Path | None = None,
     ) -> None:
         self.store = store
         self.conversation_id = conversation_id
@@ -218,6 +232,24 @@ class FourXCLI:
 
         self._worker_lock = threading.Lock()
         self._active: _TurnWorker | None = None
+        # All turn workers ever started that may still be alive (incl. released).
+        self._live_workers: list[_TurnWorker] = []
+        if run_logger is not None:
+            self.run_logger = run_logger
+        elif log_dir is not None:
+            self.run_logger = RunLogger(log_dir=log_dir, conversation_id=conversation_id)
+        else:
+            # Tests default to disabled logging unless they pass log_dir/run_logger.
+            self.run_logger = NullRunLogger(conversation_id)
+
+    def _prune_live_workers(self) -> None:
+        """Drop finished workers from the live set (caller holds ``_worker_lock``)."""
+        self._live_workers = [w for w in self._live_workers if w.thread.is_alive()]
+
+    def _any_live_worker(self) -> bool:
+        with self._worker_lock:
+            self._prune_live_workers()
+            return any(w.thread.is_alive() for w in self._live_workers)
 
     def print(self, text: str = "") -> None:
         self.stdout.write(text + ("\n" if not text.endswith("\n") else ""))
@@ -242,6 +274,9 @@ class FourXCLI:
         )
         self.print(f"Conversation DB: {self.store.db_path}")
         self.print(f"Ledger DB:       {self.ledger_db}")
+        if self.run_logger.enabled and self.run_logger.path is not None:
+            self.print(f"Run ID:          {self.run_logger.run_id}")
+            self.print(f"Log file:        {self.run_logger.path}")
         self.print("Type /help for commands.")
         pending = get_pending_approval(self.store, self.conversation_id)
         if pending is not None:
@@ -249,6 +284,16 @@ class FourXCLI:
             self.print(format_approval(pending))
             self.print("Use /approve or /decline <reason>.")
         self._announce_unresolved_posting()
+        self.run_logger.emit(
+            "session_started",
+            provider=stored.provider,
+            message_count=n,
+            conv_db=str(self.store.db_path),
+            ledger_db=str(self.ledger_db),
+        )
+        self.run_logger.log_snapshot(
+            self.store, ledger_db=self.ledger_db, note="session_start"
+        )
 
     def _announce_unresolved_posting(self) -> None:
         for row in self.store.list_unprocessed_approved(self.conversation_id):
@@ -312,6 +357,7 @@ class FourXCLI:
             self.print(f"Could not save user message: {exc}")
             return True
 
+        self.run_logger.emit("user_input", user_text=stripped, source="natural_language")
         self._start_agent_turn(
             user_message=stripped,
             allow_pending_resolution=allow_pending,
@@ -353,6 +399,10 @@ class FourXCLI:
                 if active is not None:
                     active.token.cancel()
                     active.released = True
+            self.run_logger.log_snapshot(
+                self.store, ledger_db=self.ledger_db, note="session_end"
+            )
+            self.run_logger.emit("session_ended", reason="quit")
             self.print(
                 "Goodbye. "
                 "Any cancelled model worker may still await an SDK response; "
@@ -372,13 +422,21 @@ class FourXCLI:
                     return True
                 active.token.cancel()
                 active.released = True
+            self.run_logger.emit("cancellation_requested", source="/stop")
             self.print(
                 "Stop requested. You can enter another question now. "
                 "In-flight provider calls may finish; superseded results are discarded."
             )
             return True
 
-        if self._blocks_new_turn() and name not in {"/status", "/pending", "/help"}:
+        if self._blocks_new_turn() and name not in {
+            "/status",
+            "/pending",
+            "/help",
+            "/run",
+            "/logs",
+            "/snapshot",
+        }:
             self.print("Agent is busy. Type /stop first.")
             return True
 
@@ -396,6 +454,14 @@ class FourXCLI:
             return self._cmd_pending()
         if name == "/status":
             return self._cmd_status()
+        if name == "/run":
+            return self._cmd_run()
+        if name == "/logs":
+            return self._cmd_logs()
+        if name == "/snapshot":
+            return self._cmd_snapshot()
+        if name == "/reset-demo":
+            return self._cmd_reset_demo()
 
         self.print(f"Unknown command {name!r}. Type /help.")
         return True
@@ -411,6 +477,10 @@ class FourXCLI:
             self.print(f"Could not switch provider: {exc}")
             return True
         self.print(f"Switched to {provider}.")
+        self.run_logger.emit("provider_changed", provider=provider)
+        self.run_logger.log_snapshot(
+            self.store, ledger_db=self.ledger_db, note="provider_changed"
+        )
         return True
 
     def _cmd_approve(self, arg: str) -> bool:
@@ -422,6 +492,15 @@ class FourXCLI:
             return True
         self.print("Approved. Not yet posted. Use /post to post to the ledger.")
         self.print(format_approval(result))
+        self.run_logger.emit(
+            "approval_approved",
+            approval_id=result.approval_id,
+            invoice_id=result.invoice_id,
+            status=result.status,
+        )
+        self.run_logger.log_snapshot(
+            self.store, ledger_db=self.ledger_db, note="approval_approved"
+        )
         return True
 
     def _cmd_decline(self, arg: str) -> bool:
@@ -435,6 +514,16 @@ class FourXCLI:
             return True
         self.print("Declined. Nothing was posted.")
         self.print(format_approval(result))
+        self.run_logger.emit(
+            "approval_declined",
+            approval_id=result.approval_id,
+            invoice_id=result.invoice_id,
+            status=result.status,
+            reason=result.decline_reason,
+        )
+        self.run_logger.log_snapshot(
+            self.store, ledger_db=self.ledger_db, note="approval_declined"
+        )
         return True
 
     def _resolve_approval_id(self, arg: str) -> str | None:
@@ -469,12 +558,22 @@ class FourXCLI:
         if approval_id is None:
             return True
         self.print(f"Posting via posting.post_approved (ledger DB: {self.ledger_db}) ...")
+        self.run_logger.emit("posting_started", approval_id=approval_id)
         try:
             result = post_approved(self.store, self.conversation_id, approval_id)
         except PostingUncertain as exc:
             self.print(f"Posting uncertain: {exc}")
             self.print(format_approval(exc.approval))
             self.print("Use /reconcile after inspecting the ledger. No automatic retry.")
+            self.run_logger.emit(
+                "posting_uncertain",
+                approval_id=exc.approval.approval_id,
+                status=exc.approval.status,
+                error=str(exc),
+            )
+            self.run_logger.log_snapshot(
+                self.store, ledger_db=self.ledger_db, note="posting_uncertain"
+            )
             return True
         except (
             ApprovalNotPostable,
@@ -486,15 +585,37 @@ class FourXCLI:
             PostingError,
         ) as exc:
             self.print(f"Posting refused: {type(exc).__name__}: {exc}")
+            self.run_logger.emit(
+                "posting_uncertain",
+                approval_id=approval_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+                refused=True,
+            )
             return True
         except Exception as exc:  # noqa: BLE001
             self.print(f"Posting failed: {type(exc).__name__}: {exc}")
+            self.run_logger.emit(
+                "posting_uncertain",
+                approval_id=approval_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
             return True
         self.print(
             f"Posting confirmed as {result.journal_entry_id} "
             f"(status={result.status})."
         )
         self.print(format_approval(result))
+        self.run_logger.emit(
+            "posting_confirmed",
+            approval_id=result.approval_id,
+            status=result.status,
+            journal_entry_id=result.journal_entry_id,
+        )
+        self.run_logger.log_snapshot(
+            self.store, ledger_db=self.ledger_db, note="posting_confirmed"
+        )
         return True
 
     def _cmd_reconcile(self, arg: str) -> bool:
@@ -511,19 +632,186 @@ class FourXCLI:
                     self.print(format_approval(row))
                 return True
             approval_id = rows[0].approval_id
+        self.run_logger.emit("reconciliation_started", approval_id=approval_id)
         try:
             result = reconcile_posting(self.store, self.conversation_id, approval_id)
         except PostingUncertain as exc:
             self.print(f"Still unresolved: {exc}")
             self.print(format_approval(exc.approval))
+            self.run_logger.emit(
+                "reconciliation_completed",
+                approval_id=exc.approval.approval_id,
+                status=exc.approval.status,
+                resolved=False,
+            )
             return True
         except (ApprovalNotPostable, PostingError) as exc:
             self.print(f"Reconcile refused: {exc}")
+            self.run_logger.emit(
+                "reconciliation_completed",
+                approval_id=approval_id,
+                resolved=False,
+                error=str(exc),
+            )
             return True
         self.print(
             f"Reconciled: status={result.status} journal={result.journal_entry_id}"
         )
         self.print(format_approval(result))
+        self.run_logger.emit(
+            "reconciliation_completed",
+            approval_id=result.approval_id,
+            status=result.status,
+            journal_entry_id=result.journal_entry_id,
+            resolved=True,
+        )
+        return True
+
+    def _cmd_run(self) -> bool:
+        if not self.run_logger.enabled or self.run_logger.path is None:
+            self.print("Diagnostic logging is disabled for this session.")
+            return True
+        self.print(f"run_id:   {self.run_logger.run_id}")
+        self.print(f"log_file: {self.run_logger.path}")
+        if self.run_logger.previous_run_id:
+            self.print(f"previous: {self.run_logger.previous_run_id}")
+        return True
+
+    def _cmd_logs(self) -> bool:
+        events = self.run_logger.read_recent(40)
+        if not events:
+            self.print("No log events yet (or logging disabled).")
+            return True
+        for item in events:
+            ts = item.get("timestamp", "")
+            ev = item.get("event", "?")
+            extra = {
+                k: v
+                for k, v in item.items()
+                if k not in {"timestamp", "run_id", "event", "conversation_id", "previous_run_id"}
+            }
+            self.print(f"{ts}  {ev}  {extra}")
+        return True
+
+    def _cmd_snapshot(self) -> bool:
+        snap = self.run_logger.collect_snapshot(
+            self.store, ledger_db=self.ledger_db, note="manual"
+        )
+        self.run_logger.emit("state_snapshot", ok=True, snapshot=snap, source="/snapshot")
+        self.print(json_dumps_safe(snap))
+        return True
+
+    def _cmd_reset_demo(self) -> bool:
+        """Create a fresh isolated demo conversation + ledger; never deletes old DBs/logs."""
+        if self._blocks_new_turn():
+            self.print("Cannot reset while a model turn is active. /stop first.")
+            return True
+        if self._any_live_worker():
+            self.print(
+                "Cannot reset while a previous worker is still alive "
+                "(including a cancelled SDK call still unwinding). "
+                "Wait for it to finish, then retry /reset-demo."
+            )
+            return True
+
+        old_run = self.run_logger.run_id
+        old_conv = self.conversation_id
+        old_db = str(self.store.db_path)
+        old_ledger = str(self.ledger_db)
+        old_ledger_path = Path(ledger.DB_PATH)
+        self.run_logger.emit(
+            "reset_started",
+            old_conversation_id=old_conv,
+            old_conv_db=old_db,
+            old_ledger_db=old_ledger,
+        )
+
+        # Prepare all new resources BEFORE mutating the active session.
+        try:
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            short = new_run_id()[:8]
+            demo_root = (Path.cwd() / "tmp" / "demo-runs" / f"{stamp}-{short}").resolve()
+            demo_root.mkdir(parents=True, exist_ok=True)
+            new_conv_db = (demo_root / "conversations.db").resolve()
+            new_ledger_db = (demo_root / "ledger.db").resolve()
+            new_conversation_id = f"demo-{stamp}-{short}"
+
+            # Initialize the new ledger under the process lock without publishing yet.
+            from ledger_guard import using_ledger
+
+            with using_ledger(new_ledger_db):
+                ledger.entries()
+
+            new_store = ConversationStore(new_conv_db)
+            new_store.create(new_conversation_id, "gemini")
+
+            log_dir = self.run_logger.log_dir if self.run_logger.enabled else Path("logs")
+            new_logger = RunLogger(
+                log_dir=log_dir,
+                conversation_id=new_conversation_id,
+                previous_run_id=old_run,
+                enabled=self.run_logger.enabled,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Ensure global path still matches the previous session.
+            set_ledger_path(old_ledger_path)
+            self.print(f"Demo reset failed; session unchanged: {type(exc).__name__}: {exc}")
+            self.run_logger.emit(
+                "reset_completed",
+                resolved=False,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return True
+
+        # Re-check workers immediately before publish (no indefinite wait).
+        if self._any_live_worker() or self._blocks_new_turn():
+            set_ledger_path(old_ledger_path)
+            self.print(
+                "Demo reset aborted: a worker became active during preparation. "
+                "Session unchanged."
+            )
+            self.run_logger.emit(
+                "reset_completed",
+                resolved=False,
+                error="worker_became_active",
+            )
+            return True
+
+        # Publish: permanent ledger path switch then swap CLI fields together.
+        set_ledger_path(new_ledger_db)
+        self.store = new_store
+        self.conversation_id = new_conversation_id
+        self.ledger_db = new_ledger_db
+        self.run_logger = new_logger
+
+        self.run_logger.emit(
+            "reset_completed",
+            old_run_id=old_run,
+            old_conversation_id=old_conv,
+            new_conversation_id=new_conversation_id,
+            new_conv_db=str(new_conv_db),
+            new_ledger_db=str(new_ledger_db),
+            resolved=True,
+        )
+        self.run_logger.emit(
+            "session_started",
+            provider="gemini",
+            message_count=0,
+            after_reset=True,
+        )
+        self.run_logger.log_snapshot(
+            self.store, ledger_db=self.ledger_db, note="after_reset"
+        )
+
+        self.print("Demo reset complete (previous DBs and logs were NOT deleted).")
+        self.print(f"  conversation: {new_conversation_id}")
+        self.print(f"  conv DB:      {new_conv_db}")
+        self.print(f"  ledger DB:    {new_ledger_db}")
+        self.print(f"  run_id:       {self.run_logger.run_id}")
+        if self.run_logger.path is not None:
+            self.print(f"  log file:     {self.run_logger.path}")
+        self.print(f"  previous run: {old_run}")
         return True
 
     def _cmd_pending(self) -> bool:
@@ -593,6 +881,8 @@ class FourXCLI:
                 daemon=True,
             )
             worker.thread = thread
+            self._prune_live_workers()
+            self._live_workers.append(worker)
             self._active = worker
             thread.start()
 
@@ -602,8 +892,14 @@ class FourXCLI:
         user_message: str = "",
         allow_pending_resolution: bool = False,
     ) -> None:
+        # Capture session targets at start so a later /reset-demo cannot redirect
+        # an in-flight turn onto the new store/logger (ledger path is guarded separately).
+        store = self.store
+        conversation_id = self.conversation_id
+        run_logger = self.run_logger
+        ledger_db = self.ledger_db
         try:
-            provider = self._provider()
+            provider = store.load(conversation_id).provider
             try:
                 model = self.model_factory(provider)
             except Exception as exc:  # noqa: BLE001
@@ -611,12 +907,13 @@ class FourXCLI:
                 return
             try:
                 final = run_agent_turn(
-                    store=self.store,
-                    conversation_id=self.conversation_id,
+                    store=store,
+                    conversation_id=conversation_id,
                     model=model,
                     cancel=worker.token,
                     user_message=user_message,
                     allow_pending_resolution=allow_pending_resolution,
+                    run_logger=run_logger,
                 )
                 # If this worker was superseded/released, do not print late answers.
                 with self._worker_lock:
@@ -634,6 +931,11 @@ class FourXCLI:
                     self.print("Approval required before posting:")
                     self.print(format_approval(exc.approval))
                     self.print("Type /approve or /decline <reason>.")
+                    run_logger.log_snapshot(
+                        store,
+                        ledger_db=ledger_db,
+                        note="approval_created",
+                    )
             except RunCancelled:
                 if not worker.released:
                     self.print("Turn cancelled.")
@@ -650,12 +952,19 @@ class FourXCLI:
             except Exception as exc:  # noqa: BLE001
                 if not worker.released:
                     self.print(f"Agent error: {type(exc).__name__}: {exc}")
+                    run_logger.emit(
+                        "model_call_failed",
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                        phase="turn_worker",
+                    )
         finally:
             worker.done.set()
             with self._worker_lock:
                 # Never clear a newer worker's slot.
                 if self._active is worker:
                     self._active = None
+                self._prune_live_workers()
 
     def wait_for_current_turn(self, timeout: float | None = None) -> None:
         """Wait for the current authorized worker to finish (tests / helpers)."""
@@ -749,6 +1058,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=["gemini", "groq"],
         help="Initial provider when creating a new conversation",
     )
+    parser.add_argument(
+        "--log-dir",
+        default="logs",
+        help="Directory for per-run JSONL diagnostic logs (default: logs)",
+    )
+    parser.add_argument(
+        "--no-logs",
+        action="store_true",
+        help="Disable diagnostic JSONL logging for this session",
+    )
     return parser
 
 
@@ -758,10 +1077,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.ledger_db:
         ledger.DB_PATH = Path(args.ledger_db)
     store = ConversationStore(args.db)
+    logger: RunLogger | None
+    if args.no_logs:
+        logger = NullRunLogger(args.conversation)
+    else:
+        logger = RunLogger(log_dir=args.log_dir, conversation_id=args.conversation)
     app = FourXCLI(
         store,
         args.conversation,
         ledger_db=ledger.DB_PATH,
+        run_logger=logger,
     )
     app.ensure_conversation(default_provider=args.provider)
     # If conversation existed with another provider, --provider only applies to create.
