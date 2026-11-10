@@ -2,3 +2,15 @@ ledger.db
 __pycache__/
 .venv/
 .env
+.env.*
+!.env.example
+*.db
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+AGENTS.md
+*.log
+.DS_Store
+tmp/
+temp/
