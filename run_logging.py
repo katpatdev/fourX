@@ -47,6 +47,12 @@ EVENT_NAMES = frozenset(
         "state_snapshot",
         "reset_started",
         "reset_completed",
+        "nl_intent",
+        "authorization_rejected",
+        "authorization_ambiguous",
+        "stale_response_suppressed",
+        "ledger_summary_executed",
+        "state_transition",
     }
 )
 
@@ -88,6 +94,12 @@ _ALLOWED_FIELD_KEYS = frozenset(
         "user_text_len",
         "user_text_sha12",
         "user_text_redacted",
+        "intent_category",
+        "resolved_action",
+        "state_transition",
+        "entry_count",
+        "matched_count",
+        "candidates",
     }
 )
 

@@ -101,11 +101,10 @@ class AcceptanceTests(unittest.TestCase):
         self._send("post invoice-01")
         self.assertIn("Approval required", self.out.getvalue())
         self.cli.handle_line("/approve")
-        self.cli.handle_line("/post")
         inv01 = ledger.entries(vendor_id="V-001", invoice_number="SGP/26-27/0412")
         self.assertEqual(len(inv01), 1)
         self.assertEqual(inv01[0]["amount"], "16862.20")
-        self.assertIn("Posting confirmed", self.out.getvalue())
+        self.assertIn("Approved and posted", self.out.getvalue())
 
         # --- AT2: Pending invoice-02 survives restart ---
         self.queues["gemini"] = [self._post_tool("invoice-02", "at2")]
@@ -129,10 +128,10 @@ class AcceptanceTests(unittest.TestCase):
         self.assertIn("BL-88213", self.out.getvalue())
         self.assertIn("70800.00", self.out.getvalue())
         self.cli.handle_line("/approve")
-        self.cli.handle_line("/post")
         inv02 = ledger.entries(invoice_number="BL-88213")
         self.assertEqual(len(inv02), 1)
         self.assertEqual(inv02[0]["amount"], "70800.00")
+        self.assertIn("Approved and posted", self.out.getvalue())
 
         # --- AT3: Decline invoice-03 ---
         self.queues["gemini"] = [self._post_tool("invoice-03", "at3")]

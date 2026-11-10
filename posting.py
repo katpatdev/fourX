@@ -1,7 +1,9 @@
 """Explicit approved-invoice posting with durable attempt + ledger reconciliation.
 
-Only ``post_approved`` may call ``ledger.post``. Human ``approve`` / ``decline``
-and model ``post_invoice`` never post.
+Only ``post_approved`` / ``approve_and_post`` may call ``ledger.post``.
+Human ``approve`` alone records consent; the CLI / Mode-C approval path uses
+``approve_and_post`` so assignment semantics are approve → post. Model
+``post_invoice`` never posts.
 
 Two separate ledger checks:
 
@@ -24,6 +26,13 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import ledger
+from approval import (
+    ApprovalAlreadyDecided,
+    ApprovalNotFound,
+    approve,
+    get_approval,
+    get_pending_approval,
+)
 from cancellation import CancellationToken, RunCancelled
 from invoice_tools import BlockedVendor, DuplicateInvoice
 from storage import (
@@ -448,4 +457,60 @@ def post_approved(
     raise PostingUncertain(
         uncertain,
         f"no verified ledger entry after post for {approval_id!r}",
+    )
+
+
+def approve_and_post(
+    store: ConversationStore,
+    conversation_id: str,
+    approval_id: str | None = None,
+    *,
+    cancel_token: CancellationToken | None = None,
+) -> StoredApproval:
+    """Record human approval for a pending request, then run ``post_approved``.
+
+    Assignment semantics: explicit human approve authorizes an immediate safe
+    post. Never posts while still pending without ``approve()``. Idempotent when
+    the target is already ``posted``. Leaves ``posting_uncertain`` for reconcile
+    (never auto-retries a second ``ledger.post``).
+    """
+    pending = get_pending_approval(store, conversation_id)
+    if pending is not None:
+        if approval_id is not None and approval_id != pending.approval_id:
+            raise ApprovalNotFound(
+                f"approval_id {approval_id!r} is not the pending request "
+                f"for conversation {conversation_id!r}"
+            )
+        approved = approve(store, conversation_id, pending.approval_id)
+        target_id = approved.approval_id
+    else:
+        if approval_id is None:
+            raise ApprovalNotFound(
+                f"no pending approval for conversation {conversation_id!r}"
+            )
+        existing = get_approval(store, approval_id)
+        if existing is None or existing.conversation_id != conversation_id:
+            raise ApprovalNotFound(
+                f"approval {approval_id!r} not found in conversation "
+                f"{conversation_id!r}"
+            )
+        if existing.status == "pending":
+            # Race: pending vanished between lookups — try approve by id.
+            approved = approve(store, conversation_id, approval_id)
+            target_id = approved.approval_id
+        elif existing.status in {
+            "approved",
+            "posting",
+            "posting_uncertain",
+            "posted",
+        }:
+            target_id = existing.approval_id
+        else:
+            raise ApprovalAlreadyDecided(
+                f"approval {approval_id!r} cannot be approved "
+                f"(status={existing.status!r})"
+            )
+
+    return post_approved(
+        store, conversation_id, target_id, cancel_token=cancel_token
     )

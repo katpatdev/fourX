@@ -44,6 +44,7 @@ from cancellation import (
     run_write,
 )
 from conversation import Conversation, Message, ToolCall
+from app_state import build_trusted_state_summary, conversation_with_trusted_state
 from invoice_tools import (
     BlockedVendor,
     DuplicateInvoice,
@@ -51,6 +52,7 @@ from invoice_tools import (
     InvalidInvoiceTotal,
     InvoiceNotFound,
     VendorNotFound,
+    ledger_summary,
     list_invoices,
     lookup_vendor,
     prepare_post,
@@ -163,6 +165,30 @@ def tool_declarations() -> list[dict[str, Any]]:
                 "type": "object",
                 "properties": {"invoice_id": {"type": "string"}},
                 "required": ["invoice_id"],
+            },
+        },
+        {
+            "name": "ledger_summary",
+            "description": (
+                "Read-only summary of the company ledger journal: entry count, "
+                "journal entry ids, posted invoice numbers, and optional lookup of "
+                "whether a specific invoice_number exists. Use this for any question "
+                "about how many ledger entries exist or whether an invoice was posted. "
+                "Do not guess from conversation history. Never posts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "invoice_number": {
+                        "type": "string",
+                        "description": "Optional invoice number to check for presence.",
+                    },
+                    "vendor_id": {
+                        "type": "string",
+                        "description": "Optional vendor_id filter.",
+                    },
+                },
+                "required": [],
             },
         },
     ]
@@ -300,6 +326,12 @@ def _execute_readonly_tool(name: str, arguments: dict[str, Any]) -> dict[str, An
         return {"ok": True, "result": read_invoice(arguments["invoice_id"])}
     if name == "lookup_vendor":
         return {"ok": True, "result": lookup_vendor(**arguments)}
+    if name == "ledger_summary":
+        allowed = {"invoice_number", "vendor_id"}
+        unknown = set(arguments) - allowed
+        if unknown:
+            raise TypeError(f"ledger_summary unknown arguments: {sorted(unknown)}")
+        return {"ok": True, "result": ledger_summary(**arguments)}
     return {
         "ok": False,
         "error": f"unknown tool: {name!r}",
@@ -541,8 +573,11 @@ def run_agent_turn(
 
             log.emit("model_call_started", message_count=len(conversation.messages))
             try:
+                # Ephemeral trusted state (not persisted) so the model sees DB truth.
+                state = build_trusted_state_summary(store, conversation_id)
+                model_view = conversation_with_trusted_state(conversation, state)
                 # SDK / model calls stay outside run_write (must not hold the lock).
-                raw = model(conversation, declarations)
+                raw = model(model_view, declarations)
             except InvalidModelResponse as exc:
                 log.emit("model_call_failed", error=str(exc), error_type="InvalidModelResponse")
                 raise
@@ -623,12 +658,27 @@ def run_agent_turn(
                     except json.JSONDecodeError:
                         payload = {}
                     if isinstance(payload, dict) and payload.get("ok") is False:
+                        err_type = payload.get("error_type")
                         log.emit(
                             "tool_failed",
                             tool_name=call.name,
                             tool_call_id=call.id,
-                            error_type=payload.get("error_type"),
+                            error_type=err_type,
                         )
+                        if err_type in {
+                            "AuthorizationRequired",
+                            "AmbiguousApprovalTarget",
+                            "AmbiguousPostTarget",
+                        }:
+                            log.emit(
+                                "authorization_rejected"
+                                if err_type == "AuthorizationRequired"
+                                else "authorization_ambiguous",
+                                tool_name=call.name,
+                                tool_call_id=call.id,
+                                error_type=err_type,
+                                intent_category=call.name,
+                            )
                     else:
                         log.emit(
                             "tool_completed",
@@ -636,6 +686,16 @@ def run_agent_turn(
                             tool_call_id=call.id,
                             ok=True,
                         )
+                        if call.name == "ledger_summary" and isinstance(payload, dict):
+                            result = payload.get("result")
+                            if isinstance(result, dict):
+                                log.emit(
+                                    "ledger_summary_executed",
+                                    tool_name=call.name,
+                                    tool_call_id=call.id,
+                                    entry_count=result.get("entry_count"),
+                                    matched_count=result.get("matched_count"),
+                                )
                     conversation.add(tool_message)
                     _checkpoint(store, conversation_id, conversation, token)
                     call_index += 1

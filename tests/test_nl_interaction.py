@@ -112,11 +112,11 @@ class HybridNLTests(unittest.TestCase):
         before_msgs = len(self.store.load("demo").conversation.messages)
         self.cli.handle_line("Switch to Groq")
         self.assertEqual(self.store.load("demo").provider, "groq")
-        # Mode B — no model call
+        # Mode B — no model call; application event is persisted for model awareness
         self.assertEqual(self.model.calls, 0)
-        self.assertEqual(
-            len(self.store.load("demo").conversation.messages), before_msgs
-        )
+        after = self.store.load("demo").conversation.messages
+        self.assertEqual(len(after), before_msgs + 1)
+        self.assertTrue((after[-1].extras or {}).get("application_event"))
 
     def test_03_llm_assisted_provider_switch(self) -> None:
         self.model.responses = [
@@ -168,12 +168,12 @@ class HybridNLTests(unittest.TestCase):
 
     def test_06_explicit_nl_approve(self) -> None:
         pending = self._make_pending()
-        with patch("ledger.post") as mock_post:
-            self.cli.handle_line("Approve this invoice")
-            mock_post.assert_not_called()
+        before = len(ledger.entries())
+        self.cli.handle_line("Approve this invoice")
         row = get_approval(self.store, pending.approval_id)
-        self.assertEqual(row.status, "approved")
-        self.assertIsNone(row.journal_entry_id)
+        self.assertEqual(row.status, "posted")
+        self.assertIsNotNone(row.journal_entry_id)
+        self.assertEqual(len(ledger.entries()), before + 1)
         self.assertEqual(self.model.calls, 0)
 
     def test_07_llm_assisted_approve_intent(self) -> None:
@@ -189,15 +189,16 @@ class HybridNLTests(unittest.TestCase):
                     ),
                 ),
             ),
-            Message(role="assistant", content="Recorded your approval."),
+            Message(role="assistant", content="Approved and posted."),
         ]
-        with patch("ledger.post") as mock_post:
-            self._send(
-                "I've checked the pending invoice and I'm happy to approve it."
-            )
-            mock_post.assert_not_called()
+        before = len(ledger.entries())
+        self._send(
+            "I've checked the pending invoice and I'm happy to approve it."
+        )
         row = get_approval(self.store, pending.approval_id)
-        self.assertEqual(row.status, "approved")
+        self.assertEqual(row.status, "posted")
+        self.assertIsNotNone(row.journal_entry_id)
+        self.assertEqual(len(ledger.entries()), before + 1)
 
     def test_08_ambiguous_approval_does_not_execute(self) -> None:
         pending = self._make_pending()
@@ -305,8 +306,11 @@ class HybridNLTests(unittest.TestCase):
     # --- 14–17 posting ---
 
     def test_14_explicit_nl_post_approved(self) -> None:
+        # Create an approved-but-unposted leftover via low-level approve().
         pending = self._make_pending()
-        self.cli.handle_line("/approve")
+        from approval import approve as record_approve
+
+        record_approve(self.store, "demo", pending.approval_id)
         before = len(ledger.entries())
         self.cli.handle_line("Post the invoice I approved.")
         row = get_approval(self.store, pending.approval_id)
@@ -325,7 +329,9 @@ class HybridNLTests(unittest.TestCase):
 
     def test_16_model_posting_recommendation_does_not_post(self) -> None:
         pending = self._make_pending()
-        self.cli.handle_line("/approve")
+        from approval import approve as record_approve
+
+        record_approve(self.store, "demo", pending.approval_id)
         before = len(ledger.entries())
         self.assertFalse(
             user_message_authorizes_post("Should I post this?")
@@ -346,18 +352,17 @@ class HybridNLTests(unittest.TestCase):
         )
         self.assertEqual(len(ledger.entries()), before)
 
-    def test_17_no_implicit_approve_and_post(self) -> None:
+    def test_17_explicit_approve_posts_once(self) -> None:
         pending = self._make_pending()
         before = len(ledger.entries())
-        # Approval alone must not post.
         self.cli.handle_line("I approve this invoice")
-        self.assertEqual(
-            get_approval(self.store, pending.approval_id).status, "approved"
-        )
-        self.assertEqual(len(ledger.entries()), before)
-        self.assertIsNone(
-            get_approval(self.store, pending.approval_id).journal_entry_id
-        )
+        row = get_approval(self.store, pending.approval_id)
+        self.assertEqual(row.status, "posted")
+        self.assertIsNotNone(row.journal_entry_id)
+        self.assertEqual(len(ledger.entries()), before + 1)
+        # Repeated approve cannot create a duplicate ledger row.
+        self.cli.handle_line("I approve this invoice")
+        self.assertEqual(len(ledger.entries()), before + 1)
 
     # --- 18–19 stop ---
 
@@ -407,7 +412,13 @@ class HybridNLTests(unittest.TestCase):
 
         self.assertEqual(
             {d["name"] for d in tool_declarations()},
-            {"list_invoices", "read_invoice", "lookup_vendor", "post_invoice"},
+            {
+                "list_invoices",
+                "read_invoice",
+                "lookup_vendor",
+                "post_invoice",
+                "ledger_summary",
+            },
         )
 
     def test_pending_survives_provider_nl_switch(self) -> None:
@@ -490,8 +501,10 @@ class HybridNLSafetyCorrectionTests(unittest.TestCase):
         ]
 
     def test_01_mode_c_post_returns_ok_with_journal(self) -> None:
+        from approval import approve as record_approve
+
         pending = self._make_pending()
-        self.cli.handle_line("/approve")
+        record_approve(self.store, "demo", pending.approval_id)
         before = len(self._sgp_entries())
         # Phrasing authorizes post but avoids Mode-B whole-utterance shortcut.
         post_line = "Please post the approved request."
@@ -526,7 +539,6 @@ class HybridNLSafetyCorrectionTests(unittest.TestCase):
     def test_02_repeat_post_is_idempotent(self) -> None:
         pending = self._make_pending()
         self.cli.handle_line("/approve")
-        self.cli.handle_line("/post")
         row = get_approval(self.store, pending.approval_id)
         je = row.journal_entry_id
         count = len(self._sgp_entries())
@@ -551,8 +563,10 @@ class HybridNLSafetyCorrectionTests(unittest.TestCase):
         self.assertEqual(len(self._sgp_entries()), count)
 
     def test_03_posting_uncertain_not_success(self) -> None:
+        from approval import approve as record_approve
+
         pending = self._make_pending()
-        self.cli.handle_line("/approve")
+        record_approve(self.store, "demo", pending.approval_id)
         uncertain = StoredApproval(
             approval_id=pending.approval_id,
             conversation_id="demo",
@@ -583,7 +597,7 @@ class HybridNLSafetyCorrectionTests(unittest.TestCase):
             get_approval(self.store, pending.approval_id).status, "approved"
         )
 
-    def test_04_same_turn_approve_and_post_blocked(self) -> None:
+    def test_04_same_turn_approve_posts_once_second_post_blocked(self) -> None:
         pending = self._make_pending()
         before = len(self._sgp_entries())
         um = "Please approve and then post the approved invoice"
@@ -595,23 +609,24 @@ class HybridNLSafetyCorrectionTests(unittest.TestCase):
                     ToolCall(id="p1", name="post_approved_invoice", arguments={}),
                 ),
             ),
-            Message(role="assistant", content="Approved only; post later."),
+            Message(role="assistant", content="Approved and posted."),
         ]
         self._send(um)
         row = get_approval(self.store, pending.approval_id)
-        self.assertEqual(row.status, "approved")
-        self.assertIsNone(row.journal_entry_id)
-        self.assertEqual(len(self._sgp_entries()), before)
+        self.assertEqual(row.status, "posted")
+        self.assertIsNotNone(row.journal_entry_id)
+        self.assertEqual(len(self._sgp_entries()), before + 1)
         payloads = {
             m.tool_call_id: json.loads(m.content or "")
             for m in self.store.load("demo").conversation.messages
             if m.role == "tool" and m.tool_call_id in {"a1", "p1"}
         }
         self.assertTrue(payloads["a1"]["ok"])
+        self.assertEqual(payloads["a1"]["status"], "posted")
         self.assertFalse(payloads["p1"]["ok"])
         self.assertEqual(payloads["p1"]["error_type"], "SeparateTurnRequired")
 
-    def test_05_second_model_batch_cannot_bypass_separation(self) -> None:
+    def test_05_second_model_batch_cannot_double_post(self) -> None:
         pending = self._make_pending()
         before = len(self._sgp_entries())
         um = "Please approve and then post the approved invoice"
@@ -628,13 +643,12 @@ class HybridNLSafetyCorrectionTests(unittest.TestCase):
                     ToolCall(id="p1", name="post_approved_invoice", arguments={}),
                 ),
             ),
-            Message(role="assistant", content="Need a later turn to post."),
+            Message(role="assistant", content="Already handled."),
         ]
         self._send(um)
         row = get_approval(self.store, pending.approval_id)
-        self.assertEqual(row.status, "approved")
-        self.assertIsNone(row.journal_entry_id)
-        self.assertEqual(len(self._sgp_entries()), before)
+        self.assertEqual(row.status, "posted")
+        self.assertEqual(len(self._sgp_entries()), before + 1)
         post_payload = next(
             json.loads(m.content or "")
             for m in self.store.load("demo").conversation.messages
@@ -643,43 +657,28 @@ class HybridNLSafetyCorrectionTests(unittest.TestCase):
         self.assertFalse(post_payload["ok"])
         self.assertEqual(post_payload["error_type"], "SeparateTurnRequired")
 
-    def test_06_later_turn_post_after_approve_works(self) -> None:
+    def test_06_approve_posts_immediately(self) -> None:
         pending = self._make_pending()
-        self.cli.handle_line("Approve this invoice")
-        self.assertEqual(
-            get_approval(self.store, pending.approval_id).status, "approved"
-        )
         before = len(self._sgp_entries())
-        post_line = "Please post the approved request."
-        self.model.responses = [
-            Message(
-                role="assistant",
-                tool_calls=(
-                    ToolCall(id="p1", name="post_approved_invoice", arguments={}),
-                ),
-            ),
-            Message(role="assistant", content="Posted."),
-        ]
-        self._send(post_line)
+        self.cli.handle_line("Approve this invoice")
         row = get_approval(self.store, pending.approval_id)
         self.assertEqual(row.status, "posted")
+        self.assertIsNotNone(row.journal_entry_id)
         self.assertEqual(len(self._sgp_entries()), before + 1)
-        payload = next(
-            json.loads(m.content or "")
-            for m in self.store.load("demo").conversation.messages
-            if m.role == "tool" and m.tool_call_id == "p1"
-        )
-        self.assertTrue(payload["ok"])
-        self.assertEqual(payload["journal_entry_id"], row.journal_entry_id)
 
-    def test_07_slash_approve_then_post_still_works(self) -> None:
+    def test_07_slash_approve_posts_and_post_is_idempotent(self) -> None:
         pending = self._make_pending()
         before = len(self._sgp_entries())
         self.cli.handle_line("/approve")
-        self.cli.handle_line("/post")
         row = get_approval(self.store, pending.approval_id)
         self.assertEqual(row.status, "posted")
         self.assertEqual(len(self._sgp_entries()), before + 1)
+        self.cli.handle_line("/post")
+        self.assertEqual(len(self._sgp_entries()), before + 1)
+        self.assertEqual(
+            get_approval(self.store, pending.approval_id).journal_entry_id,
+            row.journal_entry_id,
+        )
 
     def test_08_unsolicited_provider_switch_rejected(self) -> None:
         result = execute_tool_call(

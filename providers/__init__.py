@@ -40,6 +40,7 @@ def make_model(
         )
     if provider == "gemini":
         key = api_key if api_key is not None else os.environ.get("GEMINI_API_KEY")
-        return GeminiModel(api_key=key, model=model or DEFAULT_GEMINI_MODEL, client=client)
+        chosen = model or os.environ.get("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL
+        return GeminiModel(api_key=key, model=chosen, client=client)
     key = api_key if api_key is not None else os.environ.get("GROQ_API_KEY")
     return GroqModel(api_key=key, model=model or DEFAULT_GROQ_MODEL, client=client)

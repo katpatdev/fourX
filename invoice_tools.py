@@ -208,3 +208,52 @@ def prepare_post(invoice_id: str) -> dict[str, Any]:
         "currency": invoice["currency"],
         "amount": amount,
     }
+
+
+def ledger_summary(
+    *,
+    invoice_number: str | None = None,
+    vendor_id: str | None = None,
+) -> dict[str, Any]:
+    """Read-only ledger overview from ``ledger.entries`` (never posts).
+
+    Counts journal entries only — approvals are not journal rows.
+    """
+    from ledger_guard import ledger_lock
+
+    filters: dict[str, Any] = {}
+    if invoice_number is not None:
+        filters["invoice_number"] = invoice_number
+    if vendor_id is not None:
+        filters["vendor_id"] = vendor_id
+
+    with ledger_lock():
+        if filters:
+            matched = ledger.entries(**filters)
+            all_entries = ledger.entries()
+        else:
+            all_entries = ledger.entries()
+            matched = all_entries
+
+    compact = [
+        {
+            "entry_id": row.get("entry_id"),
+            "vendor_id": row.get("vendor_id"),
+            "invoice_number": row.get("invoice_number"),
+            "currency": row.get("currency"),
+            "amount": row.get("amount"),
+        }
+        for row in matched
+    ]
+    return {
+        "entry_count": len(all_entries),
+        "matched_count": len(matched),
+        "entry_ids": [row.get("entry_id") for row in all_entries],
+        "invoice_numbers": [row.get("invoice_number") for row in all_entries],
+        "contains_invoice_number": (
+            None
+            if invoice_number is None
+            else any(row.get("invoice_number") == invoice_number for row in all_entries)
+        ),
+        "entries": compact,
+    }

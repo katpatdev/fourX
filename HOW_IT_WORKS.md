@@ -92,7 +92,7 @@ Flow for ordinary text:
 |----------|----------------|
 | `/help` | Show command help |
 | `/provider gemini` or `/provider groq` | Switch model provider; persisted on the conversation |
-| `/approve` or `/approve <approval_id>` | Mark pending approval as **approved** — **does not post** |
+| `/approve` or `/approve <approval_id>` | Approve pending request **and post** via `approve_and_post` |
 | `/decline <reason>` | Decline pending approval; reason stored; nothing posted |
 | `/post` or `/post <approval_id>` | Actually call `ledger.post` via `posting.post_approved` |
 | `/reconcile` or `/reconcile <id>` | Resolve `posting` / `posting_uncertain` by looking at the ledger (never posts again blindly) |
@@ -101,7 +101,8 @@ Flow for ordinary text:
 | `/stop` | Cancel the current turn; you may ask another question **immediately** |
 | `/quit` or `/exit` | Exit promptly (state already on disk) |
 
-**Important:** the model cannot approve or post. Only you can, with `/approve` and `/post`.
+**Important:** the model cannot approve or post. Only you can, with `/approve`
+(which posts safely) or `/post` for approved/uncertain leftovers.
 
 ---
 
@@ -165,7 +166,15 @@ History (user / assistant / tool) is stored in `conversations.messages_json`.
 
 ### 6.2 Posting an invoice (happy path)
 
-Assignment idea: **ask a human before money moves**.
+#### Assignment wording (implemented)
+
+`ASSIGNMENT.md`:
+
+- “a person approves every post”
+- “**Ask before posting.** … **Approve**: post it, and the agent carries on.”
+- Demo: `you> /approve` → `agent> Posted as JE-…`
+
+Flow:
 
 ```text
 you> post invoice-01
@@ -181,19 +190,19 @@ you> post invoice-01
   pending approval saved (details snapshot shown)
   turn stops with "Approval required…"
         │
-you> /approve          ← human consent only
-        │
-you> /post             ← explicit ledger write
+you> /approve  (or "I approve this" / "Approve this invoice")
         │
         ▼
-  post_approved:
-    re-check details, reserve vendor+invoice_number,
-    claim status approved → posting, call ledger.post,
-    mark posted + journal_entry_id
+  approve_and_post:
+    record approved → post_approved (re-check, reserve, claim,
+    ledger.post once, verify journal id)
         │
         ▼
   ledger.db gains a JE-… row
 ```
+
+`/post` remains for approved-but-unposted or `posting_uncertain` leftovers.
+Ambiguous phrases never authorize. The model cannot approve or post on its own.
 
 If you **decline**:
 
@@ -383,10 +392,7 @@ agent> Approval required before posting:
        Type /approve or /decline <reason>.
 
 you> /approve
-Approved. Not yet posted. Use /post to post to the ledger.
-
-you> /post
-Posting confirmed as JE-… (status=posted).
+Approved and posted as JE-… (status=posted).
 
 you> /provider groq
 Switched to groq.
@@ -421,19 +427,19 @@ you> which invoices did you get through?
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-- Offline suite (~200 tests) uses **fake models** and temp DBs — includes AT1–AT7.
-- Live: Groq text + read-only tools verified; Gemini text verified; Gemini full
-  live tool round-trip / live cross-provider switch **not** fully verified
-  (timeouts). See README.
+- Offline suite (280 tests) uses **fake models** and temp DBs — includes AT1–AT7.
+- Live: Groq text + read-only tools verified; Gemini `gemini-3.5-flash-lite`
+  text + read-only tool round-trip verified. Live cross-provider switch under
+  load is still lightly covered. See README.
 
 ---
 
 ## 12. Mental model to remember for an interview
 
 1. **Model suggests; code decides.** Especially for money.
-2. **Approval ≠ post.** Two human steps: `/approve` then `/post`.
-3. **Two databases.** App state vs ledger; only `/post` should hit `ledger.post`.
-4. **History is durable JSON** plus structured approval rows.
+2. **Approve → post.** Explicit human `/approve` (or clear NL) runs `approve_and_post`.
+3. **Two databases.** App state vs ledger; only the posting workflow hits `ledger.post`.
+4. **History is durable JSON** plus structured approval rows + trusted state.
 5. **Stop is cooperative.** Cancel signal + supersession; SDK may still be in flight.
 6. **Safety is in Python** (blocked vendor, duplicate, reservations), not in the prompt.
 

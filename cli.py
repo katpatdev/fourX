@@ -32,8 +32,8 @@ from approval import (
     ApprovalNotFound,
     ApprovalRequest,
     InvalidDeclineReason,
-    approve,
     decline,
+    get_approval,
     get_pending_approval,
     list_approvals,
 )
@@ -47,8 +47,14 @@ from harness import (
     run_agent_turn,
     unmatched_tool_call_ids,
 )
+from app_state import record_application_event
 from invoice_tools import BlockedVendor, DuplicateInvoice
-from nl_routing import RoutedAction, match_deterministic_action
+from nl_routing import (
+    AmbiguousTarget,
+    RoutedAction,
+    match_deterministic_action,
+    resolve_approval_target,
+)
 from posting import (
     ApprovalNotPostable,
     InvoiceReservedByOther,
@@ -57,6 +63,7 @@ from posting import (
     PostingDetailsMismatch,
     PostingError,
     PostingUncertain,
+    approve_and_post,
     post_approved,
     reconcile_posting,
 )
@@ -71,9 +78,9 @@ Natural language is the primary interaction mode. Slash commands are optional sh
 Commands:
   /help                         Show this help
   /provider gemini|groq         Switch provider (persisted)
-  /approve [approval_id]        Record human approval (does not post)
+  /approve [approval_id]        Approve pending request and post to the ledger
   /decline <reason>             Decline pending approval with a reason
-  /post [approval_id]           Post an approved request via posting.post_approved
+  /post [approval_id]           Post/reconcile an already-approved or uncertain request
   /reconcile [approval_id]      Reconcile posting/posting_uncertain (never posts)
   /pending                      Show unresolved pending approval
   /status                       Provider, approvals, reservations overview
@@ -86,8 +93,9 @@ Commands:
 
 Clear phrases like "switch to groq", "approve this invoice", or "stop" are handled
 locally. Other requests go to the model; Python validates every application action.
-Approval and posting stay separate. Ambiguous financial commands ask for clarification.
-A cancelled model worker may still await an SDK response; it cannot overwrite newer turns.
+Explicit human approval posts via the safe posting workflow (assignment semantics).
+Ambiguous financial commands ask for clarification. A cancelled model worker may still
+await an SDK response; it cannot overwrite newer turns.
 """
 
 ModelFactory = Callable[[str], Any]
@@ -106,6 +114,8 @@ class _TurnWorker:
     # After /stop: no longer blocks NL input; may still be unwinding an SDK call.
     released: bool = False
     done: threading.Event = field(default_factory=threading.Event)
+    # The user text this worker was started for (stale-print guard).
+    user_message: str = ""
 
 
 def load_dotenv(path: str | Path = ".env") -> None:
@@ -325,7 +335,13 @@ class FourXCLI:
             return self._handle_command(stripped)
 
         # Mode B / local stop while a model call is blocked — no LLM wait.
-        routed = match_deterministic_action(stripped)
+        try:
+            current_provider = self.store.load(self.conversation_id).provider
+        except Exception:  # noqa: BLE001
+            current_provider = None
+        routed = match_deterministic_action(
+            stripped, current_provider=current_provider
+        )
         if self._blocks_new_turn():
             if routed is not None and routed.action == "stop":
                 return self._handle_command("/stop")
@@ -333,12 +349,25 @@ class FourXCLI:
                 return self._handle_command("/quit")
             if routed is not None and routed.action in {"status", "pending", "help"}:
                 return self._dispatch_routed(routed)
+            # Provider switch: cancel the active turn, then switch immediately.
+            if routed is not None and routed.action == "provider":
+                self._handle_command("/stop")
+                return self._dispatch_routed(routed)
             self.print(
                 "Agent is busy. Type /stop or say 'stop' to cancel, then send your message."
             )
             return True
 
         if routed is not None:
+            self.run_logger.emit(
+                "nl_intent",
+                intent_category=routed.action,
+                resolved_action=routed.action,
+                invoice_id=routed.invoice_id,
+                approval_id=routed.approval_id,
+                provider=routed.provider,
+                source="mode_b",
+            )
             return self._dispatch_routed(routed)
 
         pending = get_pending_approval(self.store, self.conversation_id)
@@ -379,12 +408,12 @@ class FourXCLI:
         if routed.action == "provider" and routed.provider:
             return self._handle_command(f"/provider {routed.provider}")
         if routed.action == "approve":
-            return self._handle_command("/approve")
+            return self._cmd_approve_nl(routed.invoice_id)
         if routed.action == "decline" and routed.reason:
             return self._handle_command(f"/decline {routed.reason}")
         if routed.action == "post":
             # Mode-B post phrases are whole-utterance and do not authorize approve.
-            return self._handle_command("/post")
+            return self._cmd_post_nl(routed.invoice_id)
         self.print("Could not interpret that shortcut. Try /help.")
         return True
 
@@ -477,29 +506,241 @@ class FourXCLI:
             self.print(f"Could not switch provider: {exc}")
             return True
         self.print(f"Switched to {provider}.")
-        self.run_logger.emit("provider_changed", provider=provider)
+        self.run_logger.emit(
+            "provider_changed",
+            provider=provider,
+            intent_category="provider",
+            resolved_action="provider",
+            state_transition="provider_changed",
+        )
+        try:
+            record_application_event(
+                self.store,
+                self.conversation_id,
+                text=(
+                    f"[application_event] Provider switched to {provider}. "
+                    "Not authorization for approve/post."
+                ),
+                event="provider_changed",
+                provider=provider,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.print(f"(warning: could not record provider event: {exc})")
         self.run_logger.log_snapshot(
             self.store, ledger_db=self.ledger_db, note="provider_changed"
         )
         return True
 
-    def _cmd_approve(self, arg: str) -> bool:
-        approval_id = arg.strip() or None
-        try:
-            result = approve(self.store, self.conversation_id, approval_id)
-        except (ApprovalNotFound, ApprovalAlreadyDecided) as exc:
-            self.print(f"Approve failed: {exc}")
+    def _cmd_approve_nl(self, invoice_id: str | None) -> bool:
+        """Mode-B approve with optional invoice reference resolution."""
+        message = (
+            f"approve {invoice_id}" if invoice_id else "approve this invoice"
+        )
+        resolved = resolve_approval_target(
+            message,
+            store=self.store,
+            conversation_id=self.conversation_id,
+            intent="approve",
+        )
+        if resolved is None:
+            self.print("Approve failed: no pending approval")
+            self.run_logger.emit(
+                "authorization_rejected",
+                intent_category="approve",
+                resolved_action="approve",
+                error_type="ApprovalNotFound",
+            )
             return True
-        self.print("Approved. Not yet posted. Use /post to post to the ledger.")
-        self.print(format_approval(result))
+        if isinstance(resolved, AmbiguousTarget):
+            self.print(resolved.message)
+            self.run_logger.emit(
+                "authorization_ambiguous",
+                intent_category="approve",
+                resolved_action="approve",
+                error_type="AmbiguousApprovalTarget",
+            )
+            return True
+        return self._cmd_approve(resolved.approval.approval_id)
+
+    def _cmd_post_nl(self, invoice_id: str | None) -> bool:
+        """Mode-B post with optional invoice reference resolution."""
+        message = f"post {invoice_id}" if invoice_id else "post this invoice"
+        resolved = resolve_approval_target(
+            message,
+            store=self.store,
+            conversation_id=self.conversation_id,
+            intent="post",
+        )
+        if resolved is None:
+            self.print("No approved/posting request found. Approve a pending request first.")
+            self.run_logger.emit(
+                "authorization_rejected",
+                intent_category="post",
+                resolved_action="post",
+                error_type="ApprovalNotFound",
+            )
+            return True
+        if isinstance(resolved, AmbiguousTarget):
+            self.print(resolved.message)
+            self.run_logger.emit(
+                "authorization_ambiguous",
+                intent_category="post",
+                resolved_action="post",
+                error_type="AmbiguousPostTarget",
+            )
+            return True
+        return self._cmd_post(resolved.approval.approval_id)
+
+    def _cmd_approve(self, arg: str) -> bool:
+        """Approve the pending request and post via ``approve_and_post``."""
+        approval_id = arg.strip() or None
         self.run_logger.emit(
             "approval_approved",
+            approval_id=approval_id,
+            intent_category="approve",
+            resolved_action="approve_and_post",
+            state_transition="pending_to_posting",
+            source="/approve",
+        )
+        self.run_logger.emit(
+            "posting_started",
+            approval_id=approval_id,
+            intent_category="approve",
+            source="/approve",
+        )
+        try:
+            result = approve_and_post(
+                self.store, self.conversation_id, approval_id
+            )
+        except (ApprovalNotFound, ApprovalAlreadyDecided) as exc:
+            self.print(f"Approve failed: {exc}")
+            self.run_logger.emit(
+                "authorization_rejected",
+                intent_category="approve",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return True
+        except PostingUncertain as exc:
+            self.print(
+                "Approved, but posting is uncertain — use /reconcile after "
+                "inspecting the ledger. No automatic retry."
+            )
+            self.print(format_approval(exc.approval))
+            self.run_logger.emit(
+                "posting_uncertain",
+                approval_id=exc.approval.approval_id,
+                invoice_id=exc.approval.invoice_id,
+                status=exc.approval.status,
+                error=str(exc),
+                state_transition="approved_to_posting_uncertain",
+            )
+            try:
+                record_application_event(
+                    self.store,
+                    self.conversation_id,
+                    text=(
+                        f"[application_event] Approval recorded for "
+                        f"{exc.approval.invoice_id} ({exc.approval.approval_id}); "
+                        f"status={exc.approval.status}; posting uncertain — reconcile."
+                    ),
+                    event="posting_uncertain",
+                    approval_id=exc.approval.approval_id,
+                    invoice_id=exc.approval.invoice_id,
+                    status=exc.approval.status,
+                )
+            except Exception as rec_exc:  # noqa: BLE001
+                self.print(f"(warning: could not record event: {rec_exc})")
+            self.run_logger.log_snapshot(
+                self.store, ledger_db=self.ledger_db, note="posting_uncertain"
+            )
+            return True
+        except (
+            ApprovalNotPostable,
+            DuplicateInvoice,
+            BlockedVendor,
+            LedgerInvoiceConflict,
+            InvoiceReservedByOther,
+            PostingDetailsMismatch,
+            PostingError,
+        ) as exc:
+            # Approval may already be durable even if post refused.
+            pending_gone = get_pending_approval(self.store, self.conversation_id)
+            row = None
+            if approval_id:
+                row = get_approval(self.store, approval_id)
+            elif pending_gone is None:
+                history = list_approvals(self.store, self.conversation_id)
+                row = history[-1] if history else None
+            self.print(
+                f"Approved consent recorded, but posting refused: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            if row is not None:
+                self.print(format_approval(row))
+                self.print(
+                    "Use /post or /reconcile once the blocking condition is resolved."
+                    if row.status in {"approved", "posting", "posting_uncertain"}
+                    else ""
+                )
+            self.run_logger.emit(
+                "posting_uncertain",
+                approval_id=getattr(row, "approval_id", approval_id),
+                status=getattr(row, "status", None),
+                error=str(exc),
+                error_type=type(exc).__name__,
+                refused=True,
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001
+            self.print(f"Approve/post failed: {type(exc).__name__}: {exc}")
+            self.run_logger.emit(
+                "posting_uncertain",
+                approval_id=approval_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return True
+
+        if result.status == "posted" and result.journal_entry_id:
+            self.print(
+                f"Approved and posted as {result.journal_entry_id} "
+                f"(status={result.status})."
+            )
+        else:
+            self.print(
+                f"Approve/post finished with status={result.status!r} "
+                f"(journal={result.journal_entry_id!r})."
+            )
+        self.print(format_approval(result))
+        self.run_logger.emit(
+            "posting_confirmed",
             approval_id=result.approval_id,
             invoice_id=result.invoice_id,
             status=result.status,
+            journal_entry_id=result.journal_entry_id,
+            intent_category="approve",
+            resolved_action="approve_and_post",
+            state_transition="pending_to_posted",
         )
+        try:
+            record_application_event(
+                self.store,
+                self.conversation_id,
+                text=(
+                    f"[application_event] Approved and posted {result.invoice_id} "
+                    f"({result.approval_id}) as {result.journal_entry_id}."
+                ),
+                event="posting_confirmed",
+                approval_id=result.approval_id,
+                invoice_id=result.invoice_id,
+                status=result.status,
+                journal_entry_id=result.journal_entry_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.print(f"(warning: could not record approval event: {exc})")
         self.run_logger.log_snapshot(
-            self.store, ledger_db=self.ledger_db, note="approval_approved"
+            self.store, ledger_db=self.ledger_db, note="approve_and_post"
         )
         return True
 
@@ -520,7 +761,25 @@ class FourXCLI:
             invoice_id=result.invoice_id,
             status=result.status,
             reason=result.decline_reason,
+            intent_category="decline",
+            resolved_action="decline",
+            state_transition="pending_to_declined",
         )
+        try:
+            record_application_event(
+                self.store,
+                self.conversation_id,
+                text=(
+                    f"[application_event] Approval declined for {result.invoice_id} "
+                    f"({result.approval_id}); nothing posted."
+                ),
+                event="approval_declined",
+                approval_id=result.approval_id,
+                invoice_id=result.invoice_id,
+                status=result.status,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.print(f"(warning: could not record decline event: {exc})")
         self.run_logger.log_snapshot(
             self.store, ledger_db=self.ledger_db, note="approval_declined"
         )
@@ -610,9 +869,29 @@ class FourXCLI:
         self.run_logger.emit(
             "posting_confirmed",
             approval_id=result.approval_id,
+            invoice_id=result.invoice_id,
             status=result.status,
             journal_entry_id=result.journal_entry_id,
+            intent_category="post",
+            resolved_action="post",
+            state_transition="approved_to_posted",
         )
+        try:
+            record_application_event(
+                self.store,
+                self.conversation_id,
+                text=(
+                    f"[application_event] Posted {result.invoice_id} "
+                    f"({result.approval_id}) as {result.journal_entry_id}."
+                ),
+                event="posting_confirmed",
+                approval_id=result.approval_id,
+                invoice_id=result.invoice_id,
+                status=result.status,
+                journal_entry_id=result.journal_entry_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.print(f"(warning: could not record posting event: {exc})")
         self.run_logger.log_snapshot(
             self.store, ledger_db=self.ledger_db, note="posting_confirmed"
         )
@@ -873,6 +1152,7 @@ class FourXCLI:
             worker = _TurnWorker(
                 token=token,
                 thread=threading.Thread(target=lambda: None),
+                user_message=user_message,
             )
             thread = threading.Thread(
                 target=self._run_turn_worker,
@@ -885,6 +1165,15 @@ class FourXCLI:
             self._live_workers.append(worker)
             self._active = worker
             thread.start()
+
+    def _worker_may_display(self, worker: _TurnWorker) -> bool:
+        """True only when this worker still owns the active turn for its user text."""
+        with self._worker_lock:
+            return (
+                self._active is worker
+                and not worker.released
+                and worker.user_message == getattr(self._active, "user_message", None)
+            )
 
     def _run_turn_worker(
         self,
@@ -915,19 +1204,20 @@ class FourXCLI:
                     allow_pending_resolution=allow_pending_resolution,
                     run_logger=run_logger,
                 )
-                # If this worker was superseded/released, do not print late answers.
-                with self._worker_lock:
-                    still_current = self._active is worker and not worker.released
-                if not still_current:
+                # Superseded / released / mismatched workers never print late answers.
+                if not self._worker_may_display(worker):
+                    run_logger.emit(
+                        "stale_response_suppressed",
+                        intent_category="turn",
+                        resolved_action="suppress_display",
+                    )
                     return
                 if final.content:
                     self.print(final.content)
                 else:
                     self.print("(assistant returned no text)")
             except ApprovalRequired as exc:
-                with self._worker_lock:
-                    still_current = self._active is worker and not worker.released
-                if still_current:
+                if self._worker_may_display(worker):
                     self.print("Approval required before posting:")
                     self.print(format_approval(exc.approval))
                     self.print("Type /approve or /decline <reason>.")

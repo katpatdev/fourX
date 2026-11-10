@@ -20,7 +20,8 @@ from typing import Any
 
 from conversation import Conversation, Message, ToolCall
 
-DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+# Override with GEMINI_MODEL; default is the requested flash-lite ID.
+DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 # google-genai HttpOptions.timeout is milliseconds; cooperative cancel cannot
 # abort an in-flight call, so bound how long we wait for the SDK to return.
 # Bound how long we wait for the SDK; does not interrupt an in-flight call early
@@ -135,7 +136,7 @@ def conversation_to_gemini_contents(conversation: Conversation) -> list[Any]:
                 tool_parts.append(response_part)
                 index += 1
             if tool_parts:
-                # gemini-3.8-flash rejects role="tool"; function responses use USER.
+                # Gemini rejects role="tool"; function responses use USER.
                 contents.append(types.Content(role="user", parts=tool_parts))
             continue
 

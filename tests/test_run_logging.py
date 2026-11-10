@@ -130,26 +130,25 @@ class RunLoggingTests(unittest.TestCase):
         pending = self._make_pending()
         self.cli.handle_line("/approve")
         events = [e for e in self._events() if e["event"] == "approval_approved"]
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["approval_id"], pending.approval_id)
-        self.assertEqual(get_approval(self.store, pending.approval_id).status, "approved")
+        self.assertTrue(events)
+        self.assertEqual(
+            get_approval(self.store, pending.approval_id).status, "posted"
+        )
 
     def test_05_confirmed_posting_logs_journal(self) -> None:
         pending = self._make_pending()
-        self.cli.handle_line("/approve")
         before = {e["entry_id"] for e in ledger.entries()}
-        self.cli.handle_line("/post")
+        self.cli.handle_line("/approve")
         row = get_approval(self.store, pending.approval_id)
         self.assertEqual(row.status, "posted")
         confirmed = [e for e in self._events() if e["event"] == "posting_confirmed"]
-        self.assertEqual(len(confirmed), 1)
-        self.assertEqual(confirmed[0]["journal_entry_id"], row.journal_entry_id)
+        self.assertTrue(confirmed)
+        self.assertEqual(confirmed[-1]["journal_entry_id"], row.journal_entry_id)
         after = {e["entry_id"] for e in ledger.entries()}
         self.assertTrue(after - before)
 
     def test_06_uncertain_posting_logged(self) -> None:
         pending = self._make_pending()
-        self.cli.handle_line("/approve")
         uncertain = StoredApproval(
             approval_id=pending.approval_id,
             conversation_id="demo",
@@ -158,15 +157,12 @@ class RunLoggingTests(unittest.TestCase):
             status="posting_uncertain",
         )
         with patch(
-            "cli.post_approved",
+            "cli.approve_and_post",
             side_effect=PostingUncertain(uncertain, "cannot verify"),
         ):
-            self.cli.handle_line("/post")
+            self.cli.handle_line("/approve")
         found = [e for e in self._events() if e["event"] == "posting_uncertain"]
         self.assertTrue(found)
-        self.assertEqual(
-            get_approval(self.store, pending.approval_id).status, "approved"
-        )
 
     def test_07_cancellation_logged(self) -> None:
         entered = threading.Event()

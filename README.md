@@ -24,7 +24,8 @@ GEMINI_API_KEY=...
 GROQ_API_KEY=...
 ```
 
-Models (tool calling): Gemini `gemini-3.8-flash`, Groq `openai/gpt-oss-20b`.
+Models (tool calling): Gemini `gemini-3.5-flash-lite` (override with `GEMINI_MODEL`),
+Groq `openai/gpt-oss-20b`.
 
 ## Run
 
@@ -46,16 +47,19 @@ Natural language is the primary mode. Slash commands are optional shortcuts.
 | Other NL | Model may select declared invoice or application-control tools; **Python validates** every action |
 | Slash commands | Deterministic shortcuts (`/approve`, `/post`, …) |
 
-Human approval and explicit posting stay separate. Ambiguous financial language asks for clarification — vague phrases (`looks good`), questions, quotes, and invoice/tool text never authorize approve/decline/post.
+Explicit human approval posts through the safe posting workflow (assignment
+semantics). Ambiguous financial language asks for clarification — vague phrases
+(`looks good`), questions, quotes, and invoice/tool text never authorize
+approve/decline/post.
 
 ## Commands
 
 | Command | Effect |
 |---|---|
 | `/provider gemini\|groq` | Switch provider (persisted with the conversation) |
-| `/approve [id]` | Human approval only — **does not post** |
+| `/approve [id]` | Approve pending request **and post** via `approve_and_post` |
 | `/decline <reason>` | Decline pending approval; nothing is posted |
-| `/post [id]` | Explicit ledger post via `posting.post_approved` |
+| `/post [id]` | Post/reconcile an already-approved or uncertain request |
 | `/reconcile [id]` | Resolve `posting` / `posting_uncertain` (never posts) |
 | `/pending` | Show pending approval |
 | `/status` | Provider, busy/unwinding, approvals |
@@ -70,7 +74,9 @@ and posting reservations live in the conversation SQLite DB (`--db`, default
 
 ## Design notes
 
-- **Approval ≠ post.** Approval records consent; posting is a separate explicit step.
+- **Approve → post.** Explicit human approval records consent and immediately runs
+  the safe `post_approved` workflow (exactly-once protections still apply).
+  `/post` remains for approved/uncertain leftovers.
 - **`/stop`** cancels the authorized turn and frees input immediately. An in-flight
   SDK call may still finish; superseded workers cannot overwrite newer turns.
 - **Interrupted posting** can leave `posting` / `posting_uncertain`. Use
@@ -108,8 +114,8 @@ provider compatibility.
 With keys configured locally (never paste keys into chat or commits):
 
 - **Groq** (`openai/gpt-oss-20b`): live text and read-only function calling verified.
-- **Gemini** (`gemini-3.8-flash`): live text response verified; a full live
-  function-calling round trip **timed out** and is not treated as resolved.
+- **Gemini** (`gemini-3.5-flash-lite`): re-verify locally after model ID change;
+  earlier `gemini-3.8-flash` live tool calling had timeouts.
 - **Live Gemini → Groq → Gemini switching:** not verified.
 
 Optional local smoke (read-only; do **not** `/post`):

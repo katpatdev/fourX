@@ -223,7 +223,8 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(len(model.calls), 1)
         approve(self.store, "demo", pending_id)
         mock_post.assert_not_called()
-        self.assertFalse(Path("ledger.db").exists())
+        # Approve must not post; durable row stays without a journal id.
+        self.assertIsNone(get_approval(self.store, pending_id).journal_entry_id)
 
     def test_final_answer_after_tools(self) -> None:
         self._add_user("summarise")
@@ -416,7 +417,14 @@ class HarnessTests(unittest.TestCase):
     def test_tool_declarations_include_approval_gated_post(self) -> None:
         names = {item["name"] for item in tool_declarations()}
         self.assertEqual(
-            names, {"list_invoices", "read_invoice", "lookup_vendor", "post_invoice"}
+            names,
+            {
+                "list_invoices",
+                "read_invoice",
+                "lookup_vendor",
+                "post_invoice",
+                "ledger_summary",
+            },
         )
         post = next(item for item in tool_declarations() if item["name"] == "post_invoice")
         self.assertEqual(post["parameters"]["required"], ["invoice_id"])

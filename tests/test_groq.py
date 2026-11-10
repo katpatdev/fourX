@@ -140,7 +140,14 @@ class GroqAdapterTests(unittest.TestCase):
         tools = groq_tools_from_declarations(tool_declarations())
         names = {item["function"]["name"] for item in tools}
         self.assertEqual(
-            names, {"list_invoices", "read_invoice", "lookup_vendor", "post_invoice"}
+            names,
+            {
+                "list_invoices",
+                "read_invoice",
+                "lookup_vendor",
+                "post_invoice",
+                "ledger_summary",
+            },
         )
         post = next(item for item in tools if item["function"]["name"] == "post_invoice")
         self.assertIn("invoice_id", post["function"]["parameters"]["properties"])

@@ -14,15 +14,18 @@ from approval import (
     ApprovalNotFound,
     DISPLAY_KEYS,
     InvalidDeclineReason,
-    approve,
     decline,
     get_pending_approval,
     list_approvals,
 )
 from invoice_tools import BlockedVendor, DuplicateInvoice
+from app_state import build_trusted_state_summary
 from nl_routing import (
+    AmbiguousTarget,
+    ResolvedTarget,
     extract_decline_reason,
     normalize_provider,
+    resolve_approval_target,
     user_message_authorizes_approve,
     user_message_authorizes_post,
     user_message_authorizes_provider_switch,
@@ -34,6 +37,7 @@ from posting import (
     PostingDetailsMismatch,
     PostingError,
     PostingUncertain,
+    approve_and_post,
     post_approved,
 )
 from storage import ConversationStore, InvalidProvider, StoredApproval
@@ -138,12 +142,19 @@ def _dispatch(
         )
 
     if name == "get_application_status":
+        summary = build_trusted_state_summary(store, conversation_id)
         stored = store.load(conversation_id)
         history = list_approvals(store, conversation_id)
         return _ok(
-            provider=stored.provider,
+            provider=summary["provider"],
             messages=len(stored.conversation.messages),
-            pending=get_pending_approval(store, conversation_id) is not None,
+            pending=summary["pending_approval"] is not None,
+            pending_approval=summary["pending_approval"],
+            approved_unposted=summary["approved_unposted"],
+            posted=summary["posted"],
+            most_recently_referenced_invoice=summary[
+                "most_recently_referenced_invoice"
+            ],
             approvals=[
                 {
                     "approval_id": a.approval_id,
@@ -181,12 +192,21 @@ def _dispatch(
         if not user_message_authorizes_approve(user_message):
             return _err(
                 "current user message does not clearly authorize approval; "
-                "ask the clerk to say e.g. 'approve this invoice'",
+                "ask the clerk to say e.g. 'I want to approve this' or "
+                "'approve this invoice'",
                 "AuthorizationRequired",
             )
-        pending = get_pending_approval(store, conversation_id)
-        if pending is None:
+        resolved = resolve_approval_target(
+            user_message,
+            store=store,
+            conversation_id=conversation_id,
+            intent="approve",
+        )
+        if resolved is None:
             return _err("no pending approval to approve", "ApprovalNotFound")
+        if isinstance(resolved, AmbiguousTarget):
+            return _err(resolved.message, "AmbiguousApprovalTarget")
+        pending = resolved.approval
         requested = args.get("approval_id")
         if requested and requested != pending.approval_id:
             return _err(
@@ -194,19 +214,56 @@ def _dispatch(
                 f"{pending.approval_id!r}",
                 "ApprovalMismatch",
             )
-        result = approve(store, conversation_id, pending.approval_id)
+        # Assignment semantics: human approve → safe post_approved workflow.
+        try:
+            result = approve_and_post(
+                store, conversation_id, pending.approval_id
+            )
+        except PostingUncertain as exc:
+            turn_state["approved_this_turn"] = True
+            row = exc.approval
+            return {
+                "ok": False,
+                "error": str(exc),
+                "error_type": "PostingUncertain",
+                "approval_id": row.approval_id,
+                "invoice_id": row.invoice_id,
+                "status": row.status,
+                "journal_entry_id": getattr(row, "journal_entry_id", None),
+                "message": (
+                    "approval recorded but posting is uncertain; "
+                    "use /reconcile — no automatic retry"
+                ),
+            }
         turn_state["approved_this_turn"] = True
         approved_ids = turn_state.setdefault("approved_ids_this_turn", set())
         if isinstance(approved_ids, set):
             approved_ids.add(result.approval_id)
+        if not isinstance(result, StoredApproval):
+            return _err(
+                f"unexpected approve/post result type {type(result).__name__}",
+                "PostingError",
+            )
+        if result.status != "posted" or not result.journal_entry_id:
+            return {
+                "ok": False,
+                "error": (
+                    "approval recorded but posting did not confirm a journal entry "
+                    f"(status={result.status!r})"
+                ),
+                "error_type": "PostingNotConfirmed",
+                "approval_id": result.approval_id,
+                "invoice_id": result.invoice_id,
+                "status": result.status,
+                "journal_entry_id": result.journal_entry_id,
+            }
         return _ok(
             status=result.status,
             approval_id=result.approval_id,
-            message=(
-                "approved; not posted — post in a later turn "
-                "(/post or 'post the approved invoice')"
-            ),
-            approval=result.display(),
+            invoice_id=result.invoice_id,
+            journal_entry_id=result.journal_entry_id,
+            message=f"approved and posted as {result.journal_entry_id}",
+            approval=_approval_summary(result),
         )
 
     if name == "decline_pending_approval":
@@ -244,7 +301,7 @@ def _dispatch(
         if not user_message_authorizes_post(user_message):
             return _err(
                 "current user message does not explicitly request posting; "
-                "say e.g. 'post the approved invoice'",
+                "say e.g. 'post this invoice' or 'post the approved invoice'",
                 "AuthorizationRequired",
             )
         # Approval and posting require separate human turns.
@@ -260,17 +317,38 @@ def _dispatch(
         if approval_id is not None and not isinstance(approval_id, str):
             return _err("approval_id must be a string", "TypeError")
         if not approval_id:
-            rows = [
-                r
-                for r in store.list_unprocessed_approved(conversation_id)
-                if r.status == "approved"
-            ]
-            if len(rows) != 1:
+            resolved = resolve_approval_target(
+                user_message,
+                store=store,
+                conversation_id=conversation_id,
+                intent="post",
+            )
+            if resolved is None:
                 return _err(
-                    "need exactly one approved request, or pass approval_id",
-                    "AmbiguousPostTarget",
+                    "no approved request ready to post",
+                    "ApprovalNotFound",
                 )
-            approval_id = rows[0].approval_id
+            if isinstance(resolved, AmbiguousTarget):
+                return _err(resolved.message, "AmbiguousPostTarget")
+            approval_id = resolved.approval.approval_id
+        else:
+            # Model-supplied id must still match a durable approved row and
+            # any explicit invoice reference in the current user message.
+            resolved = resolve_approval_target(
+                user_message,
+                store=store,
+                conversation_id=conversation_id,
+                intent="post",
+            )
+            if isinstance(resolved, AmbiguousTarget):
+                return _err(resolved.message, "AmbiguousPostTarget")
+            if isinstance(resolved, ResolvedTarget):
+                if resolved.approval.approval_id != approval_id:
+                    return _err(
+                        f"approval_id {approval_id!r} does not match resolved "
+                        f"target {resolved.approval.approval_id!r}",
+                        "ApprovalMismatch",
+                    )
         try:
             result = post_approved(store, conversation_id, approval_id)
         except PostingUncertain as exc:

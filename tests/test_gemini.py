@@ -182,7 +182,13 @@ class GeminiAdapterTests(unittest.TestCase):
         names = [fn.name for fn in tools[0].function_declarations]
         self.assertEqual(
             set(names),
-            {"list_invoices", "read_invoice", "lookup_vendor", "post_invoice"},
+            {
+                "list_invoices",
+                "read_invoice",
+                "lookup_vendor",
+                "post_invoice",
+                "ledger_summary",
+            },
         )
         post = next(fn for fn in tools[0].function_declarations if fn.name == "post_invoice")
         self.assertIn("invoice_id", (post.parameters_json_schema or {}).get("properties", {}))
@@ -408,7 +414,7 @@ class GeminiSdkNativeRoundTripTests(unittest.TestCase):
         self.assertIn("serialize Gemini native content", str(ctx.exception))
 
     def test_function_response_uses_user_role_for_gemini_38(self) -> None:
-        """gemini-3.8-flash rejects role='tool'; map function responses to USER."""
+        """Gemini rejects role='tool'; map function responses to USER."""
         from google.genai import types
 
         conversation = Conversation()

@@ -19,7 +19,7 @@ from cli import (
 )
 from conversation import Conversation, Message, ToolCall
 from harness import RecoveryRequired, unmatched_tool_call_ids
-from posting import post_approved
+from posting import approve_and_post, post_approved
 from storage import ConversationStore
 
 
@@ -130,7 +130,7 @@ class CLITests(unittest.TestCase):
         self.assertIn("V-001", text)
         self.assertIn("SGP/26-27/0412", text)
 
-    def test_05_approve_does_not_post(self) -> None:
+    def test_05_approve_posts_via_safe_workflow(self) -> None:
         self.model.responses = [
             Message(
                 role="assistant",
@@ -145,11 +145,12 @@ class CLITests(unittest.TestCase):
         ]
         with patch("ledger.entries", return_value=[]):
             self._send("post invoice-01")
-        with patch("ledger.post") as mock_post:
-            self.cli.handle_line("/approve")
-            mock_post.assert_not_called()
-        self.assertIn("Not yet posted", self.out.getvalue())
-        self.assertEqual(ledger.entries(invoice_number="SGP/26-27/0412"), [])
+        before = len(ledger.entries())
+        self.cli.handle_line("/approve")
+        self.assertIn("Approved and posted", self.out.getvalue())
+        rows = ledger.entries(invoice_number="SGP/26-27/0412")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(ledger.entries()), before + 1)
 
     def test_06_decline_persists_reason(self) -> None:
         self.model.responses = [
@@ -186,13 +187,16 @@ class CLITests(unittest.TestCase):
         ]
         with patch("ledger.entries", return_value=[]):
             self._send("post invoice-01")
-        self.cli.handle_line("/approve")
-        with patch("cli.post_approved", wraps=post_approved) as mock_pa:
+        with patch("cli.approve_and_post", wraps=approve_and_post) as mock_aap:
             with patch("ledger.post", wraps=ledger.post) as mock_post:
-                self.cli.handle_line("/post")
-                mock_pa.assert_called_once()
+                self.cli.handle_line("/approve")
+                mock_aap.assert_called_once()
                 self.assertEqual(mock_post.call_count, 1)
-        self.assertIn("Posting confirmed", self.out.getvalue())
+        self.assertIn("Approved and posted", self.out.getvalue())
+        # Leftover /post path stays available and idempotent.
+        with patch("cli.post_approved", wraps=post_approved) as mock_pa:
+            self.cli.handle_line("/post")
+            mock_pa.assert_called_once()
 
     def test_08_restart_resumes_pending(self) -> None:
         self.model.responses = [
@@ -581,12 +585,12 @@ class CLITests(unittest.TestCase):
         self.cli.handle_line("anything")
         self.assertTrue(entered.wait(timeout=5))
         with patch("ledger.post") as mock_post:
-            with patch("cli.approve") as mock_approve:
+            with patch("cli.approve_and_post") as mock_aap:
                 with patch("cli.decline") as mock_decline:
                     with patch("cli.post_approved") as mock_pa:
                         self.cli.handle_line("/stop")
                         mock_post.assert_not_called()
-                        mock_approve.assert_not_called()
+                        mock_aap.assert_not_called()
                         mock_decline.assert_not_called()
                         mock_pa.assert_not_called()
         block.set()
