@@ -11,18 +11,18 @@ from pathlib import Path
 from unittest.mock import patch
 
 import ledger
-from approval import get_approval, get_pending_approval, request_approval
-from cli import FourXCLI
-from conversation import Conversation, Message, ToolCall
-from harness import all_tool_declarations, execute_tool_call, run_agent_turn
-from nl_routing import (
+from fourx.finance.approval import get_approval, get_pending_approval, request_approval
+from fourx.cli import FourXCLI
+from fourx.agent.conversation import Conversation, Message, ToolCall
+from fourx.agent.harness import all_tool_declarations, execute_tool_call, run_agent_turn
+from fourx.tools.nl_routing import (
     match_deterministic_action,
     user_message_authorizes_approve,
     user_message_authorizes_post,
     user_message_authorizes_provider_switch,
 )
-from posting import PostingUncertain
-from storage import ConversationStore, StoredApproval
+from fourx.finance.posting import PostingUncertain
+from fourx.persistence.storage import ConversationStore, StoredApproval
 
 
 class FakeModel:
@@ -308,7 +308,7 @@ class HybridNLTests(unittest.TestCase):
     def test_14_explicit_nl_post_approved(self) -> None:
         # Create an approved-but-unposted leftover via low-level approve().
         pending = self._make_pending()
-        from approval import approve as record_approve
+        from fourx.finance.approval import approve as record_approve
 
         record_approve(self.store, "demo", pending.approval_id)
         before = len(ledger.entries())
@@ -329,7 +329,7 @@ class HybridNLTests(unittest.TestCase):
 
     def test_16_model_posting_recommendation_does_not_post(self) -> None:
         pending = self._make_pending()
-        from approval import approve as record_approve
+        from fourx.finance.approval import approve as record_approve
 
         record_approve(self.store, "demo", pending.approval_id)
         before = len(ledger.entries())
@@ -408,7 +408,7 @@ class HybridNLTests(unittest.TestCase):
         self.assertIn("approve_pending_approval", names)
         self.assertIn("post_invoice", names)
         # Invoice-only list stays small for adapters.
-        from harness import tool_declarations
+        from fourx.agent.harness import tool_declarations
 
         self.assertEqual(
             {d["name"] for d in tool_declarations()},
@@ -501,7 +501,7 @@ class HybridNLSafetyCorrectionTests(unittest.TestCase):
         ]
 
     def test_01_mode_c_post_returns_ok_with_journal(self) -> None:
-        from approval import approve as record_approve
+        from fourx.finance.approval import approve as record_approve
 
         pending = self._make_pending()
         record_approve(self.store, "demo", pending.approval_id)
@@ -563,7 +563,7 @@ class HybridNLSafetyCorrectionTests(unittest.TestCase):
         self.assertEqual(len(self._sgp_entries()), count)
 
     def test_03_posting_uncertain_not_success(self) -> None:
-        from approval import approve as record_approve
+        from fourx.finance.approval import approve as record_approve
 
         pending = self._make_pending()
         record_approve(self.store, "demo", pending.approval_id)
@@ -577,7 +577,7 @@ class HybridNLSafetyCorrectionTests(unittest.TestCase):
         )
         before = len(ledger.entries())
         with patch(
-            "app_actions.post_approved",
+            "fourx.tools.app_actions.post_approved",
             side_effect=PostingUncertain(uncertain, "cannot verify"),
         ):
             result = execute_tool_call(

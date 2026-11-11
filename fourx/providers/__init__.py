@@ -5,11 +5,11 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from conversation import Conversation, Message
-from storage import ALLOWED_PROVIDERS, InvalidProvider
+from fourx.agent.conversation import Conversation, Message
+from fourx.persistence.storage import ALLOWED_PROVIDERS, InvalidProvider
 
-from providers.gemini import DEFAULT_GEMINI_MODEL, GeminiModel, gemini_tools_from_declarations
-from providers.groq import DEFAULT_GROQ_MODEL, GroqModel, groq_tools_from_declarations
+from fourx.providers.gemini import DEFAULT_GEMINI_MODEL, GeminiModel, gemini_tools_from_declarations
+from fourx.providers.groq import DEFAULT_GROQ_MODEL, GroqModel, groq_tools_from_declarations
 
 __all__ = [
     "DEFAULT_GEMINI_MODEL",

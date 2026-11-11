@@ -11,13 +11,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import ledger
-from approval import get_approval, request_approval
-from cli import FourXCLI
-from conversation import Conversation, Message, ToolCall
-from harness import run_agent_turn
-from posting import PostingUncertain
-from run_logging import RunLogger, sanitize_text
-from storage import ConversationStore, StoredApproval
+from fourx.finance.approval import get_approval, request_approval
+from fourx.cli import FourXCLI
+from fourx.agent.conversation import Conversation, Message, ToolCall
+from fourx.agent.harness import run_agent_turn
+from fourx.finance.posting import PostingUncertain
+from fourx.diagnostics.run_logging import RunLogger, sanitize_text
+from fourx.persistence.storage import ConversationStore, StoredApproval
 
 
 class FakeModel:
@@ -157,7 +157,7 @@ class RunLoggingTests(unittest.TestCase):
             status="posting_uncertain",
         )
         with patch(
-            "cli.approve_and_post",
+            "fourx.cli.approve_and_post",
             side_effect=PostingUncertain(uncertain, "cannot verify"),
         ):
             self.cli.handle_line("/approve")
@@ -178,7 +178,7 @@ class RunLoggingTests(unittest.TestCase):
         self.assertIn("cancellation_requested", names)
         block.set()
         slow.finished.wait(5)
-        # Worker may emit cancellation_completed from harness.
+        # Worker may emit cancellation_completed from fourx.agent.harness.
         self.assertTrue(
             "cancellation_requested" in names or "cancellation_completed" in names
         )
@@ -351,7 +351,7 @@ class RunLoggingTests(unittest.TestCase):
         stored.conversation.add(Message(role="user", content="post invoice-01"))
         self.store.save("demo", stored.conversation)
         with patch("ledger.entries", return_value=[]):
-            from harness import ApprovalRequired
+            from fourx.agent.harness import ApprovalRequired
 
             with self.assertRaises(ApprovalRequired):
                 run_agent_turn(
@@ -412,8 +412,8 @@ class RunLoggingTests(unittest.TestCase):
 
     def test_18_snapshot_and_eligibility_do_not_cross_ledgers(self) -> None:
         """Concurrent snapshot path swap must not poison eligibility ledger reads."""
-        import ledger_guard
-        from invoice_tools import prepare_post
+        from fourx.persistence import ledger_guard
+        from fourx.tools.invoice_tools import prepare_post
 
         other_ledger = Path(self._tmpdir.name) / "other-ledger.db"
         with ledger_guard.using_ledger(other_ledger):
@@ -484,7 +484,7 @@ class RunLoggingTests(unittest.TestCase):
         try:
             os.chdir(self._tmpdir.name)
             with patch(
-                "storage.ConversationStore.create",
+                "fourx.persistence.storage.ConversationStore.create",
                 side_effect=RuntimeError("boom-create"),
             ):
                 self.cli.handle_line("/reset-demo")
@@ -499,7 +499,7 @@ class RunLoggingTests(unittest.TestCase):
         self.assertIn("session unchanged", self.out.getvalue().lower())
 
     def test_20_recursive_sanitization_nested_secrets(self) -> None:
-        from run_logging import sanitize_value
+        from fourx.diagnostics.run_logging import sanitize_value
 
         payload = {
             "ok": True,

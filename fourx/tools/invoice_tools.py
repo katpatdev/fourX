@@ -15,7 +15,8 @@ from typing import Any
 
 import ledger
 
-ROOT = Path(__file__).resolve().parent
+# Repository root — fixtures stay outside the package tree.
+ROOT = Path(__file__).resolve().parents[2]
 INVOICES_DIR = ROOT / "invoices"
 VENDORS_PATH = ROOT / "vendors.json"
 
@@ -189,7 +190,7 @@ def prepare_post(invoice_id: str) -> dict[str, Any]:
     invoice_number = invoice["invoice_number"]
     # Fail closed: any ledger lookup error must not look like "no duplicate".
     # Serialize against CLI snapshot/reset path swaps (process-local).
-    from ledger_guard import ledger_lock
+    from fourx.persistence.ledger_guard import ledger_lock
 
     with ledger_lock():
         existing = ledger.entries(vendor_id=vendor_id, invoice_number=invoice_number)
@@ -219,7 +220,7 @@ def ledger_summary(
 
     Counts journal entries only — approvals are not journal rows.
     """
-    from ledger_guard import ledger_lock
+    from fourx.persistence.ledger_guard import ledger_lock
 
     filters: dict[str, Any] = {}
     if invoice_number is not None:

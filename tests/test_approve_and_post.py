@@ -9,11 +9,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 import ledger
-from approval import approve, get_approval, request_approval
-from cli import FourXCLI
-from conversation import Message
-from posting import PostingUncertain, approve_and_post, post_approved
-from storage import ConversationStore, StoredApproval
+from fourx.finance.approval import approve, get_approval, request_approval
+from fourx.cli import FourXCLI
+from fourx.agent.conversation import Message
+from fourx.finance.posting import PostingUncertain, approve_and_post, post_approved
+from fourx.persistence.storage import ConversationStore, StoredApproval
 
 
 class ApproveAndPostTests(unittest.TestCase):
@@ -97,7 +97,7 @@ class ApproveAndPostTests(unittest.TestCase):
             status="posting_uncertain",
         )
         with patch(
-            "cli.approve_and_post",
+            "fourx.cli.approve_and_post",
             side_effect=PostingUncertain(uncertain, "cannot verify"),
         ):
             self.cli.handle_line("/approve")
@@ -133,7 +133,7 @@ class ApproveAndPostTests(unittest.TestCase):
     def test_posting_failure_reports_durable_approved_state(self) -> None:
         pending = self._pending()
         with patch(
-            "posting.post_approved",
+            "fourx.finance.posting.post_approved",
             side_effect=RuntimeError("ledger unavailable"),
         ):
             # approve() succeeds inside approve_and_post before post_approved.

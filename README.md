@@ -27,14 +27,38 @@ GROQ_API_KEY=...
 Models (tool calling): Gemini `gemini-3.5-flash-lite` (override with `GEMINI_MODEL`),
 Groq `openai/gpt-oss-20b`.
 
+## Layout
+
+```text
+fourx/                 Application package
+  cli.py               Interactive clerk shell
+  agent/               Agent loop, conversation, cancellation
+  providers/           Gemini + Groq adapters
+  tools/               Invoice tools, NL routing, app-control tools
+  finance/             Approval + safe posting
+  persistence/         Conversation SQLite + ledger path guard
+  diagnostics/         Run logging + trusted state summaries
+ledger.py              Untouched assignment ledger (root)
+invoices/, vendors.json
+tests/
+```
+
 ## Run
+
+Preferred:
+
+```bash
+python -m fourx --conversation demo
+# resume the same id after quit:
+python -m fourx --conversation demo
+# optional paths:
+python -m fourx -c demo --db ./conversations.db --ledger-db ./ledger.db
+```
+
+Compatibility launcher (same app):
 
 ```bash
 python cli.py --conversation demo
-# resume the same id after quit:
-python cli.py --conversation demo
-# optional paths:
-python cli.py -c demo --db ./conversations.db --ledger-db ./ledger.db
 ```
 
 ## Interaction
@@ -95,8 +119,8 @@ under `logs/` (gitignored). Use `/run`, `/logs`, and `/snapshot` during a sessio
 without deleting previous databases or log files.
 
 ```bash
-python cli.py -c demo                  # logging on (default --log-dir logs)
-python cli.py -c demo --no-logs        # disable JSONL diagnostics
+python -m fourx -c demo                  # logging on (default --log-dir logs)
+python -m fourx -c demo --no-logs        # disable JSONL diagnostics
 ```
 
 ## Offline tests
@@ -121,7 +145,7 @@ With keys configured locally (never paste keys into chat or commits):
 Optional local smoke (read-only; do **not** `/post`):
 
 ```bash
-python cli.py -c live-smoke --db /tmp/fourx-live.db --ledger-db /tmp/fourx-live-ledger.db
+python -m fourx -c live-smoke --db /tmp/fourx-live.db --ledger-db /tmp/fourx-live-ledger.db
 ```
 
 ## Limitations

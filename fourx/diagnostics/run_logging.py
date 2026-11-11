@@ -17,9 +17,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from approval import get_pending_approval, list_approvals
-from ledger_guard import using_ledger
-from storage import ConversationStore
+from fourx.finance.approval import get_pending_approval, list_approvals
+from fourx.persistence.ledger_guard import using_ledger
+from fourx.persistence.storage import ConversationStore
 
 # Event names required by the diagnostic design.
 EVENT_NAMES = frozenset(

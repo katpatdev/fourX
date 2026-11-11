@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from approval import (
+from fourx.finance.approval import (
     ApprovalAlreadyDecided,
     ApprovalNotFound,
     DISPLAY_KEYS,
@@ -18,9 +18,9 @@ from approval import (
     get_pending_approval,
     list_approvals,
 )
-from invoice_tools import BlockedVendor, DuplicateInvoice
-from app_state import build_trusted_state_summary
-from nl_routing import (
+from fourx.tools.invoice_tools import BlockedVendor, DuplicateInvoice
+from fourx.diagnostics.app_state import build_trusted_state_summary
+from fourx.tools.nl_routing import (
     AmbiguousTarget,
     ResolvedTarget,
     extract_decline_reason,
@@ -30,7 +30,7 @@ from nl_routing import (
     user_message_authorizes_post,
     user_message_authorizes_provider_switch,
 )
-from posting import (
+from fourx.finance.posting import (
     ApprovalNotPostable,
     InvoiceReservedByOther,
     LedgerInvoiceConflict,
@@ -40,8 +40,8 @@ from posting import (
     approve_and_post,
     post_approved,
 )
-from storage import ConversationStore, InvalidProvider, StoredApproval
-from conversation import Message, ToolCall
+from fourx.persistence.storage import ConversationStore, InvalidProvider, StoredApproval
+from fourx.agent.conversation import Message, ToolCall
 
 
 def _ok(**payload: Any) -> dict[str, Any]:

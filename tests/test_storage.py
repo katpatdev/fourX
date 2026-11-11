@@ -8,8 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from conversation import Conversation, Message, ToolCall
-from storage import (
+from fourx.agent.conversation import Conversation, Message, ToolCall
+from fourx.persistence.storage import (
     ConversationExists,
     ConversationNotFound,
     ConversationStore,

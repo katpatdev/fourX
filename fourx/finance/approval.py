@@ -2,7 +2,7 @@
 
 The model may request ``post_invoice``; only explicit application APIs
 ``approve`` / ``decline`` record a human decision. Nothing here calls
-``ledger.post()`` — use ``posting.post_approved`` for that.
+``ledger.post()`` — use ``fourx.finance.posting.post_approved`` for that.
 
 Each request has a durable ``approval_id``. Completed decisions are never
 overwritten. While an unresolved approved/posting intent exists for a
@@ -14,8 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from invoice_tools import prepare_post
-from storage import (
+from fourx.tools.invoice_tools import prepare_post
+from fourx.persistence.storage import (
     ApprovalDecisionConflict,
     ApprovalPendingExists,
     ApprovalRowMissing,

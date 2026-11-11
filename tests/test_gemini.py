@@ -10,9 +10,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from conversation import Conversation, Message, ToolCall
-from harness import tool_declarations
-from providers.gemini import (
+from fourx.agent.conversation import Conversation, Message, ToolCall
+from fourx.agent.harness import tool_declarations
+from fourx.providers.gemini import (
     DEFAULT_GEMINI_MODEL,
     GeminiModel,
     MissingAPIKeyError,
@@ -21,7 +21,7 @@ from providers.gemini import (
     gemini_response_to_message,
     gemini_tools_from_declarations,
 )
-from storage import ConversationStore
+from fourx.persistence.storage import ConversationStore
 
 
 def _part_text(text: str) -> SimpleNamespace:
@@ -201,8 +201,8 @@ class GeminiAdapterTests(unittest.TestCase):
         model = GeminiModel(api_key="test-key", client=fake_client)
         conversation = Conversation()
         conversation.add(Message(role="user", content="hi"))
-        with patch("invoice_tools.ledger.post") as mock_post:
-            with patch("invoice_tools.list_invoices") as mock_list:
+        with patch("fourx.tools.invoice_tools.ledger.post") as mock_post:
+            with patch("fourx.tools.invoice_tools.list_invoices") as mock_list:
                 result = model(conversation, tool_declarations())
         self.assertEqual(result.content, "done")
         mock_post.assert_not_called()
@@ -266,7 +266,7 @@ class ProviderSwitchWithGeminiHistoryTests(unittest.TestCase):
             self.assertEqual(loaded.conversation.messages[1].tool_calls[0].id, "read6")
             self.assertEqual(loaded.conversation.messages[2].tool_call_id, "read6")
             # Groq can consume the same canonical history.
-            from providers.groq import conversation_to_groq_messages
+            from fourx.providers.groq import conversation_to_groq_messages
 
             groq_messages = conversation_to_groq_messages(loaded.conversation)
             self.assertEqual(groq_messages[1]["tool_calls"][0]["id"], "read6")
@@ -355,7 +355,7 @@ class GeminiSdkNativeRoundTripTests(unittest.TestCase):
         self.assertEqual(contents[1].parts[0].function_call.id, "call_read6")
         self.assertTrue(contents[1].parts[0].thought_signature)
 
-        from providers.groq import conversation_to_groq_messages
+        from fourx.providers.groq import conversation_to_groq_messages
 
         groq_messages = conversation_to_groq_messages(loaded)
         self.assertEqual(groq_messages[1]["tool_calls"][0]["id"], "call_read6")

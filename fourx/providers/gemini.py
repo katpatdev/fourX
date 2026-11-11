@@ -18,7 +18,7 @@ import os
 import uuid
 from typing import Any
 
-from conversation import Conversation, Message, ToolCall
+from fourx.agent.conversation import Conversation, Message, ToolCall
 
 # Override with GEMINI_MODEL; default is the requested flash-lite ID.
 DEFAULT_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")

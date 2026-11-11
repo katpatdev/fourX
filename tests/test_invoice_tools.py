@@ -6,8 +6,8 @@ import unittest
 from decimal import Decimal
 from unittest.mock import patch
 
-import invoice_tools
-from invoice_tools import (
+import fourx.tools.invoice_tools as invoice_tools
+from fourx.tools.invoice_tools import (
     BlockedVendor,
     DuplicateInvoice,
     InvalidInvoiceId,
@@ -100,8 +100,8 @@ class InvoiceToolsTests(unittest.TestCase):
         with self.assertRaises(VendorNotFound):
             lookup_vendor(vendor_id="V-999")
 
-    @patch("invoice_tools.ledger.entries", return_value=[])
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.entries", return_value=[])
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_prepare_invoice_01_when_ledger_empty(self, mock_post, mock_entries) -> None:
         result = prepare_post("invoice-01")
         self.assertEqual(
@@ -122,8 +122,8 @@ class InvoiceToolsTests(unittest.TestCase):
         )
         mock_post.assert_not_called()
 
-    @patch("invoice_tools.ledger.entries", return_value=[])
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.entries", return_value=[])
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_prepare_invoice_02_when_ledger_empty(self, mock_post, mock_entries) -> None:
         result = prepare_post("invoice-02")
         self.assertEqual(result["vendor_id"], "V-002")
@@ -135,8 +135,8 @@ class InvoiceToolsTests(unittest.TestCase):
         )
         mock_post.assert_not_called()
 
-    @patch("invoice_tools.ledger.entries")
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.entries")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_reject_invoice_04_blocked_vendor(self, mock_post, mock_entries) -> None:
         with self.assertRaises(BlockedVendor) as ctx:
             prepare_post("invoice-04")
@@ -147,7 +147,7 @@ class InvoiceToolsTests(unittest.TestCase):
         mock_post.assert_not_called()
 
     @patch(
-        "invoice_tools.ledger.entries",
+        "fourx.tools.invoice_tools.ledger.entries",
         return_value=[
             {
                 "entry_id": "JE-000001",
@@ -157,7 +157,7 @@ class InvoiceToolsTests(unittest.TestCase):
             }
         ],
     )
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_reject_invoice_05_duplicate(self, mock_post, mock_entries) -> None:
         with self.assertRaises(DuplicateInvoice) as ctx:
             prepare_post("invoice-05")
@@ -170,7 +170,7 @@ class InvoiceToolsTests(unittest.TestCase):
         )
         mock_post.assert_not_called()
 
-    @patch("invoice_tools.ledger.entries")
+    @patch("fourx.tools.invoice_tools.ledger.entries")
     def test_duplicate_check_uses_vendor_id_and_invoice_number(self, mock_entries) -> None:
         mock_entries.return_value = []
         prepare_post("invoice-03")
@@ -199,18 +199,18 @@ class InvoiceToolsTests(unittest.TestCase):
             "total": "-1.00",
         }
         with patch.object(invoice_tools, "read_invoice", return_value=fake):
-            with patch("invoice_tools.ledger.entries", return_value=[]):
+            with patch("fourx.tools.invoice_tools.ledger.entries", return_value=[]):
                 with self.assertRaises(InvalidInvoiceTotal):
                     prepare_post("invoice-01")
 
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_suite_never_calls_ledger_post_on_prepare_paths(self, mock_post) -> None:
-        with patch("invoice_tools.ledger.entries", return_value=[]):
+        with patch("fourx.tools.invoice_tools.ledger.entries", return_value=[]):
             prepare_post("invoice-01")
         with self.assertRaises(BlockedVendor):
             prepare_post("invoice-04")
         with patch(
-            "invoice_tools.ledger.entries",
+            "fourx.tools.invoice_tools.ledger.entries",
             return_value=[{"entry_id": "JE-000001", "vendor_id": "V-002", "invoice_number": "BL-88190"}],
         ):
             with self.assertRaises(DuplicateInvoice):
@@ -219,14 +219,14 @@ class InvoiceToolsTests(unittest.TestCase):
 
     def test_ledger_lookup_failure_is_not_treated_as_eligible(self) -> None:
         with patch(
-            "invoice_tools.ledger.entries",
+            "fourx.tools.invoice_tools.ledger.entries",
             side_effect=RuntimeError("ledger unavailable"),
         ):
             with self.assertRaises(RuntimeError):
                 prepare_post("invoice-01")
 
-    @patch("invoice_tools.ledger.entries", return_value=[])
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.entries", return_value=[])
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_active_vendor_accepted_for_prepare(self, mock_post, mock_entries) -> None:
         active = {
             "vendor_id": "V-001",
@@ -240,8 +240,8 @@ class InvoiceToolsTests(unittest.TestCase):
         mock_entries.assert_called_once()
         mock_post.assert_not_called()
 
-    @patch("invoice_tools.ledger.entries")
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.entries")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_blocked_vendor_rejected_before_ledger_lookup(self, mock_post, mock_entries) -> None:
         blocked = {
             "vendor_id": "V-004",
@@ -256,8 +256,8 @@ class InvoiceToolsTests(unittest.TestCase):
         mock_entries.assert_not_called()
         mock_post.assert_not_called()
 
-    @patch("invoice_tools.ledger.entries")
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.entries")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_unexpected_vendor_status_rejected(self, mock_post, mock_entries) -> None:
         suspended = {
             "vendor_id": "V-001",
@@ -271,8 +271,8 @@ class InvoiceToolsTests(unittest.TestCase):
         mock_entries.assert_not_called()
         mock_post.assert_not_called()
 
-    @patch("invoice_tools.ledger.entries")
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.entries")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_missing_vendor_status_rejected(self, mock_post, mock_entries) -> None:
         no_status = {
             "vendor_id": "V-001",
@@ -299,7 +299,7 @@ class InvoiceToolsTests(unittest.TestCase):
             validate_posting_amount("0.001")
 
     @patch(
-        "invoice_tools.ledger.entries",
+        "fourx.tools.invoice_tools.ledger.entries",
         return_value=[
             {
                 "entry_id": "JE-000001",
@@ -308,7 +308,7 @@ class InvoiceToolsTests(unittest.TestCase):
             }
         ],
     )
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_duplicate_detection_still_works_after_corrections(self, mock_post, mock_entries) -> None:
         with self.assertRaises(DuplicateInvoice):
             prepare_post("invoice-05")

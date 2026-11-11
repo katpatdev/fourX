@@ -10,12 +10,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 import ledger
-from approval import approve, decline, list_approvals, request_approval
-from cancellation import CancellationToken, RunCancelled
-from conversation import Conversation, Message, ToolCall
-from harness import ApprovalRequired, run_agent_turn
-from invoice_tools import BlockedVendor, DuplicateInvoice
-from posting import (
+from fourx.finance.approval import approve, decline, list_approvals, request_approval
+from fourx.agent.cancellation import CancellationToken, RunCancelled
+from fourx.agent.conversation import Conversation, Message, ToolCall
+from fourx.agent.harness import ApprovalRequired, run_agent_turn
+from fourx.tools.invoice_tools import BlockedVendor, DuplicateInvoice
+from fourx.finance.posting import (
     ApprovalNotPostable,
     InvoiceReservedByOther,
     LedgerAmbiguity,
@@ -26,7 +26,7 @@ from posting import (
     post_approved,
     reconcile_posting,
 )
-from storage import (
+from fourx.persistence.storage import (
     ApprovalPostingClaimConflict,
     ConversationStore,
     InvoiceAlreadyReserved,
@@ -465,7 +465,7 @@ class PostingTests(unittest.TestCase):
                 )
             ]
         )
-        with patch("invoice_tools.ledger.post") as mock_post:
+        with patch("fourx.tools.invoice_tools.ledger.post") as mock_post:
             with patch("ledger.entries", return_value=[]):
                 with self.assertRaises(ApprovalRequired):
                     run_agent_turn(store=self.store, conversation_id="demo", model=model)
@@ -545,7 +545,7 @@ class PostingTests(unittest.TestCase):
     def test_33_ledger_lookup_failure_blocks_fresh_post(self) -> None:
         approved = self._approve_invoice("invoice-01")
         with patch(
-            "posting.list_identifier_ledger_entries",
+            "fourx.finance.posting.list_identifier_ledger_entries",
             side_effect=RuntimeError("db locked"),
         ):
             with patch("ledger.post") as mock_post:

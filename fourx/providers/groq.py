@@ -11,7 +11,7 @@ import json
 import os
 from typing import Any
 
-from conversation import Conversation, Message, ToolCall
+from fourx.agent.conversation import Conversation, Message, ToolCall
 
 # Tool-calling model verified against the Groq API for this take-home.
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"

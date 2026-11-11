@@ -26,15 +26,15 @@ import json
 from collections.abc import Callable
 from typing import Any
 
-from app_actions import execute_app_control_tool
-from approval import (
+from fourx.tools.app_actions import execute_app_control_tool
+from fourx.finance.approval import (
     ApprovalAlreadyPending,
     ApprovalBlockedByApproved,
     ApprovalRequest,
     get_approval,
     get_pending_approval,
 )
-from cancellation import (
+from fourx.agent.cancellation import (
     CancellationToken,
     RunCancelled,
     StaleRunError,
@@ -43,9 +43,9 @@ from cancellation import (
     end_run,
     run_write,
 )
-from conversation import Conversation, Message, ToolCall
-from app_state import build_trusted_state_summary, conversation_with_trusted_state
-from invoice_tools import (
+from fourx.agent.conversation import Conversation, Message, ToolCall
+from fourx.diagnostics.app_state import build_trusted_state_summary, conversation_with_trusted_state
+from fourx.tools.invoice_tools import (
     BlockedVendor,
     DuplicateInvoice,
     InvalidInvoiceId,
@@ -58,9 +58,9 @@ from invoice_tools import (
     prepare_post,
     read_invoice,
 )
-from nl_routing import APP_CONTROL_TOOL_NAMES, app_control_declarations
-from run_logging import NullRunLogger, RunLogger
-from storage import (
+from fourx.tools.nl_routing import APP_CONTROL_TOOL_NAMES, app_control_declarations
+from fourx.diagnostics.run_logging import NullRunLogger, RunLogger
+from fourx.persistence.storage import (
     ApprovalPendingExists,
     ApprovalUnprocessedExists,
     ConversationStore,
@@ -174,7 +174,7 @@ def tool_declarations() -> list[dict[str, Any]]:
                 "journal entry ids, posted invoice numbers, and optional lookup of "
                 "whether a specific invoice_number exists. Use this for any question "
                 "about how many ledger entries exist or whether an invoice was posted. "
-                "Do not guess from conversation history. Never posts."
+                "Do not guess from fourx.agent.conversation history. Never posts."
             ),
             "parameters": {
                 "type": "object",

@@ -10,10 +10,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import ledger
-from approval import list_approvals
-from cli import FourXCLI
-from conversation import Conversation, Message, ToolCall
-from storage import ConversationStore
+from fourx.finance.approval import list_approvals
+from fourx.cli import FourXCLI
+from fourx.agent.conversation import Conversation, Message, ToolCall
+from fourx.persistence.storage import ConversationStore
 
 
 class ScriptedModel:
@@ -230,7 +230,7 @@ class AcceptanceTests(unittest.TestCase):
             ),
         ]
         before = len(list_approvals(self.store, "accept"))
-        with patch("invoice_tools.ledger.post") as mock_post:
+        with patch("fourx.tools.invoice_tools.ledger.post") as mock_post:
             self._send("post invoice-04")
             mock_post.assert_not_called()
         self.assertEqual(len(list_approvals(self.store, "accept")), before)
@@ -249,7 +249,7 @@ class AcceptanceTests(unittest.TestCase):
             ),
         ]
         before = len(list_approvals(self.store, "accept"))
-        with patch("invoice_tools.ledger.post") as mock_post:
+        with patch("fourx.tools.invoice_tools.ledger.post") as mock_post:
             self._send("post invoice-05")
             mock_post.assert_not_called()
         self.assertEqual(len(list_approvals(self.store, "accept")), before)

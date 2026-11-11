@@ -11,19 +11,19 @@ from pathlib import Path
 from unittest.mock import patch
 
 import ledger
-from approval import get_approval, get_pending_approval, request_approval
-from cli import FourXCLI
-from conversation import Conversation, Message, ToolCall
-from harness import run_agent_turn, tool_declarations, unmatched_tool_call_ids
-from invoice_tools import ledger_summary
-from nl_routing import (
+from fourx.finance.approval import get_approval, get_pending_approval, request_approval
+from fourx.cli import FourXCLI
+from fourx.agent.conversation import Conversation, Message, ToolCall
+from fourx.agent.harness import run_agent_turn, tool_declarations, unmatched_tool_call_ids
+from fourx.tools.invoice_tools import ledger_summary
+from fourx.tools.nl_routing import (
     match_deterministic_action,
     user_message_authorizes_approve,
     user_message_authorizes_post,
     user_message_authorizes_provider_switch,
 )
-from providers.gemini import DEFAULT_GEMINI_MODEL, GeminiModel
-from storage import ConversationStore
+from fourx.providers.gemini import DEFAULT_GEMINI_MODEL, GeminiModel
+from fourx.persistence.storage import ConversationStore
 
 
 class FakeModel:
@@ -186,7 +186,7 @@ class NlUxRegressionTests(unittest.TestCase):
         )
 
     def test_07_post_this_invoice_succeeds(self) -> None:
-        from approval import approve as record_approve
+        from fourx.finance.approval import approve as record_approve
 
         pending = self._make_pending("invoice-02")
         record_approve(self.store, "demo", pending.approval_id)
@@ -364,7 +364,7 @@ class NlUxRegressionTests(unittest.TestCase):
         custom = GeminiModel(api_key="test", model="gemini-custom", client=client)
         self.assertEqual(custom.model, "gemini-custom")
         # Configured model is used on generate_content
-        from providers.gemini import gemini_tools_from_declarations
+        from fourx.providers.gemini import gemini_tools_from_declarations
 
         part = MagicMock()
         part.function_call = None

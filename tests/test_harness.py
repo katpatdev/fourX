@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from conversation import Conversation, Message, ToolCall
-from approval import approve, get_approval
-from harness import (
+from fourx.agent.conversation import Conversation, Message, ToolCall
+from fourx.finance.approval import approve, get_approval
+from fourx.agent.harness import (
     ApprovalRequired,
     InvalidModelResponse,
     IterationLimitReached,
@@ -19,7 +19,7 @@ from harness import (
     run_agent_turn,
     tool_declarations,
 )
-from storage import ConversationStore
+from fourx.persistence.storage import ConversationStore
 
 
 class FakeModel:
@@ -61,7 +61,7 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(final.content, "Hello from Acme AP.")
         self.assertEqual(len(model.calls), 1)
 
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_list_invoices_tool(self, mock_post) -> None:
         self._add_user("list invoices")
         model = FakeModel(
@@ -82,7 +82,7 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(len(payload["result"]), 6)
         mock_post.assert_not_called()
 
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_read_invoice_06(self, mock_post) -> None:
         self._add_user("what's on invoice-06?")
         model = FakeModel(
@@ -191,7 +191,7 @@ class HarnessTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["error_type"], "UnknownTool")
 
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     @patch("ledger.entries", return_value=[])
     def test_post_invoice_creates_pending_without_posting(self, mock_entries, mock_post) -> None:
         self._add_user("post invoice-01")
@@ -261,7 +261,7 @@ class HarnessTests(unittest.TestCase):
                 Message(role="assistant", content="ok"),
             ]
         )
-        with patch("harness.execute_tool_call", side_effect=wrapped):
+        with patch("fourx.agent.harness.execute_tool_call", side_effect=wrapped):
             run_agent_turn(store=self.store, conversation_id="demo", model=model)
         # Before the tool runs, history already includes the assistant tool request.
         self.assertEqual(seen[0], "user,assistant")

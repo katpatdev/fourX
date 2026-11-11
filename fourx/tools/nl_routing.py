@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from storage import ALLOWED_PROVIDERS, ConversationStore, StoredApproval
+from fourx.persistence.storage import ALLOWED_PROVIDERS, ConversationStore, StoredApproval
 
 ActionName = Literal[
     "stop",
@@ -376,7 +376,7 @@ def resolve_approval_target(
     For approve: candidates are pending. For post: candidates are approved.
     Returns None when there is no candidate at all.
     """
-    from approval import get_pending_approval, list_approvals
+    from fourx.finance.approval import get_pending_approval, list_approvals
 
     if intent == "approve":
         pending = get_pending_approval(store, conversation_id)

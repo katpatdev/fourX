@@ -7,3 +7,13 @@ dependencies = [
   "google-genai>=1.0.0,<4",
   "groq>=0.11.0,<2",
 ]
+
+[project.scripts]
+fourx = "fourx.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["fourx*"]

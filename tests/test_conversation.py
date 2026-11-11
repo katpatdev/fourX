@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import unittest
 
-from conversation import Conversation, Message, ToolCall
+from fourx.agent.conversation import Conversation, Message, ToolCall
 
 
 class ConversationRepresentationTests(unittest.TestCase):

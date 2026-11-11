@@ -26,16 +26,16 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import ledger
-from approval import (
+from fourx.finance.approval import (
     ApprovalAlreadyDecided,
     ApprovalNotFound,
     approve,
     get_approval,
     get_pending_approval,
 )
-from cancellation import CancellationToken, RunCancelled
-from invoice_tools import BlockedVendor, DuplicateInvoice
-from storage import (
+from fourx.agent.cancellation import CancellationToken, RunCancelled
+from fourx.tools.invoice_tools import BlockedVendor, DuplicateInvoice
+from fourx.persistence.storage import (
     ApprovalDecisionConflict,
     ApprovalPostingClaimConflict,
     ApprovalRowMissing,
@@ -131,7 +131,7 @@ def _entry_matches_details(entry: dict[str, Any], details: dict[str, Any]) -> bo
 
 def list_identifier_ledger_entries(details: dict[str, Any]) -> list[dict[str, Any]]:
     """All ledger rows for vendor_id + invoice_number (no detail filter)."""
-    from ledger_guard import ledger_lock
+    from fourx.persistence.ledger_guard import ledger_lock
 
     with ledger_lock():
         return ledger.entries(
@@ -224,7 +224,7 @@ def _load_for_conversation(
 
 def _recheck_prepared_details(row: StoredApproval) -> dict[str, Any]:
     """Rebuild eligibility from fixtures; require exact match to approved snapshot."""
-    from invoice_tools import (
+    from fourx.tools.invoice_tools import (
         lookup_vendor,
         read_invoice,
         validate_posting_amount,
@@ -412,7 +412,7 @@ def post_approved(
     try:
         if cancel_token is not None and cancel_token.cancelled:
             return reconcile_posting(store, conversation_id, approval_id)
-        from ledger_guard import ledger_lock
+        from fourx.persistence.ledger_guard import ledger_lock
 
         # Hold the process ledger lock only around the ERP call — never across
         # provider SDK waits. Path must already be the intended session ledger.

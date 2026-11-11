@@ -9,9 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from conversation import Conversation, Message, ToolCall
-from harness import tool_declarations
-from providers.groq import (
+from fourx.agent.conversation import Conversation, Message, ToolCall
+from fourx.agent.harness import tool_declarations
+from fourx.providers.groq import (
     DEFAULT_GROQ_MODEL,
     GroqModel,
     MissingAPIKeyError,
@@ -20,7 +20,7 @@ from providers.groq import (
     groq_response_to_message,
     groq_tools_from_declarations,
 )
-from storage import ConversationStore
+from fourx.persistence.storage import ConversationStore
 
 
 def _groq_response(
@@ -158,8 +158,8 @@ class GroqAdapterTests(unittest.TestCase):
         model = GroqModel(api_key="test-key", client=fake_client)
         conversation = Conversation()
         conversation.add(Message(role="user", content="hi"))
-        with patch("invoice_tools.ledger.post") as mock_post:
-            with patch("invoice_tools.read_invoice") as mock_read:
+        with patch("fourx.tools.invoice_tools.ledger.post") as mock_post:
+            with patch("fourx.tools.invoice_tools.read_invoice") as mock_read:
                 result = model(conversation, tool_declarations())
         self.assertEqual(result.content, "ok")
         mock_post.assert_not_called()
@@ -204,7 +204,7 @@ class GroqAdapterTests(unittest.TestCase):
             store.set_provider("demo", "gemini")
             loaded = store.load("demo")
             self.assertEqual(loaded.provider, "gemini")
-            from providers.gemini import conversation_to_gemini_contents
+            from fourx.providers.gemini import conversation_to_gemini_contents
 
             gemini_contents = conversation_to_gemini_contents(loaded.conversation)
             self.assertEqual(gemini_contents[1].role, "model")
@@ -220,8 +220,8 @@ class Invoice06SwitchDemoTests(unittest.TestCase):
     """Manual acceptance scenario using mocked provider responses."""
 
     def test_mocked_gemini_then_groq_then_gemini_invoice_06(self) -> None:
-        from providers.gemini import gemini_response_to_message
-        from providers.groq import groq_response_to_message
+        from fourx.providers.gemini import gemini_response_to_message
+        from fourx.providers.groq import groq_response_to_message
         from tests.test_gemini import _gemini_response, _part_function
 
         conversation = Conversation()
@@ -242,7 +242,7 @@ class Invoice06SwitchDemoTests(unittest.TestCase):
         self.assertEqual(gemini_assistant.tool_calls[0].id, "read6")
 
         # Harness would execute read_invoice; we append the real tool result shape.
-        from invoice_tools import read_invoice
+        from fourx.tools.invoice_tools import read_invoice
 
         invoice = read_invoice("invoice-06")
         conversation.add(
@@ -269,7 +269,7 @@ class Invoice06SwitchDemoTests(unittest.TestCase):
         self.assertIn("Shree Ganesh Packaging Pvt Ltd", groq_answer.content or "")
 
         # Switch back to Gemini — history still has tool id + line items.
-        from providers.gemini import conversation_to_gemini_contents
+        from fourx.providers.gemini import conversation_to_gemini_contents
 
         gemini_contents = conversation_to_gemini_contents(conversation)
         self.assertEqual(len(gemini_contents) >= 3, True)

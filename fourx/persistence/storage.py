@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from conversation import Conversation
+from fourx.agent.conversation import Conversation
 
 Provider = Literal["gemini", "groq"]
 ALLOWED_PROVIDERS = frozenset({"gemini", "groq"})

@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from approval import (
+from fourx.finance.approval import (
     ApprovalAlreadyPending,
     ApprovalBlockedByApproved,
     ApprovalNotFound,
@@ -20,8 +20,8 @@ from approval import (
     list_approvals,
     request_approval,
 )
-from conversation import Conversation, Message, ToolCall
-from harness import (
+from fourx.agent.conversation import Conversation, Message, ToolCall
+from fourx.agent.harness import (
     ApprovalRequired,
     PersistenceError,
     RecoveryRequired,
@@ -29,9 +29,9 @@ from harness import (
     tool_declarations,
     unmatched_tool_call_ids,
 )
-from providers.gemini import gemini_tools_from_declarations
-from providers.groq import groq_tools_from_declarations
-from storage import ConversationStore
+from fourx.providers.gemini import gemini_tools_from_declarations
+from fourx.providers.groq import groq_tools_from_declarations
+from fourx.persistence.storage import ConversationStore
 
 
 class FakeModel:
@@ -75,7 +75,7 @@ class ApprovalLifecycleTests(unittest.TestCase):
             ]
         )
 
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     @patch("ledger.entries", return_value=[])
     def test_eligible_invoice_01_creates_pending_with_exact_details(
         self, mock_entries, mock_post
@@ -149,7 +149,7 @@ class ApprovalLifecycleTests(unittest.TestCase):
         approve(self.store, "demo", first.approval_id)
         with self.assertRaises(ApprovalNotFound):
             approve(self.store, "demo")
-        from storage import ApprovalDecisionConflict
+        from fourx.persistence.storage import ApprovalDecisionConflict
 
         with self.assertRaises(ApprovalDecisionConflict):
             self.store.set_approval_decision(first.approval_id, status="approved")
@@ -160,7 +160,7 @@ class ApprovalLifecycleTests(unittest.TestCase):
         decline(self.store, "demo", "not now", first.approval_id)
         with self.assertRaises(ApprovalNotFound):
             decline(self.store, "demo", "again")
-        from storage import ApprovalDecisionConflict
+        from fourx.persistence.storage import ApprovalDecisionConflict
 
         with self.assertRaises(ApprovalDecisionConflict):
             self.store.set_approval_decision(
@@ -184,7 +184,7 @@ class ApprovalLifecycleTests(unittest.TestCase):
         self.assertIsNotNone(pending)
         self.assertEqual(pending.status, "pending")
 
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_invoice_04_blocked_no_pending(self, mock_post) -> None:
         self._add_user("post invoice-04")
         model = FakeModel(
@@ -209,7 +209,7 @@ class ApprovalLifecycleTests(unittest.TestCase):
         self.assertEqual(list_approvals(self.store, "demo"), [])
         mock_post.assert_not_called()
 
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     @patch(
         "ledger.entries",
         return_value=[{"entry_id": "JE-000001", "invoice_number": "BL-88190"}],
@@ -363,7 +363,7 @@ class ApprovalLifecycleTests(unittest.TestCase):
         self.assertEqual(json.loads(msgs[3].content or "")["status"], "pending")
         self.assertEqual(unmatched_tool_call_ids(self.store.load("demo").conversation), [])
 
-    @patch("harness.lookup_vendor")
+    @patch("fourx.agent.harness.lookup_vendor")
     @patch("ledger.entries", return_value=[])
     def test_post_then_lookup_skips_without_executing(self, mock_entries, mock_lookup) -> None:
         self._add_user("post then lookup")
@@ -428,7 +428,7 @@ class ApprovalLifecycleTests(unittest.TestCase):
         self.assertEqual(json.loads(msgs[3].content or "")["error_type"], "SkippedForApproval")
         self.assertEqual(msgs[3].tool_call_id, "p2")
 
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     @patch("ledger.entries", return_value=[])
     def test_approve_and_decline_never_post(self, mock_entries, mock_post) -> None:
         first = request_approval(self.store, "demo", "invoice-01")
@@ -451,10 +451,10 @@ class ApprovalLifecycleTests(unittest.TestCase):
         self.assertIn("post_invoice", gemini_names)
         self.assertIn("post_invoice", groq_names)
 
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_providers_do_not_execute_ledger_post(self, mock_post) -> None:
-        from providers.gemini import GeminiModel
-        from providers.groq import GroqModel
+        from fourx.providers.gemini import GeminiModel
+        from fourx.providers.groq import GroqModel
         from types import SimpleNamespace
 
         fake_gemini = MagicMock()
@@ -482,7 +482,7 @@ class ApprovalLifecycleTests(unittest.TestCase):
         )
         mock_post.assert_not_called()
 
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_readonly_tools_still_work(self, mock_post) -> None:
         self._add_user("list")
         model = FakeModel(

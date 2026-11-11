@@ -10,17 +10,17 @@ from pathlib import Path
 from unittest.mock import patch
 
 import ledger
-from cli import (
+from fourx.cli import (
     FourXCLI,
     append_user_message,
     format_approval,
     load_dotenv,
     reconcile_trailing_cancelled_tools,
 )
-from conversation import Conversation, Message, ToolCall
-from harness import RecoveryRequired, unmatched_tool_call_ids
-from posting import approve_and_post, post_approved
-from storage import ConversationStore
+from fourx.agent.conversation import Conversation, Message, ToolCall
+from fourx.agent.harness import RecoveryRequired, unmatched_tool_call_ids
+from fourx.finance.posting import approve_and_post, post_approved
+from fourx.persistence.storage import ConversationStore
 
 
 class FakeModel:
@@ -187,14 +187,14 @@ class CLITests(unittest.TestCase):
         ]
         with patch("ledger.entries", return_value=[]):
             self._send("post invoice-01")
-        with patch("cli.approve_and_post", wraps=approve_and_post) as mock_aap:
+        with patch("fourx.cli.approve_and_post", wraps=approve_and_post) as mock_aap:
             with patch("ledger.post", wraps=ledger.post) as mock_post:
                 self.cli.handle_line("/approve")
                 mock_aap.assert_called_once()
                 self.assertEqual(mock_post.call_count, 1)
         self.assertIn("Approved and posted", self.out.getvalue())
         # Leftover /post path stays available and idempotent.
-        with patch("cli.post_approved", wraps=post_approved) as mock_pa:
+        with patch("fourx.cli.post_approved", wraps=post_approved) as mock_pa:
             self.cli.handle_line("/post")
             mock_pa.assert_called_once()
 
@@ -260,7 +260,7 @@ class CLITests(unittest.TestCase):
             ),
             Message(role="assistant", content="Vendor blocked."),
         ]
-        with patch("invoice_tools.ledger.post") as mock_post:
+        with patch("fourx.tools.invoice_tools.ledger.post") as mock_post:
             self._send("post invoice-04")
             mock_post.assert_not_called()
         self.assertEqual(self.store.list_approvals("demo"), [])
@@ -279,7 +279,7 @@ class CLITests(unittest.TestCase):
             ),
             Message(role="assistant", content="Duplicate."),
         ]
-        with patch("invoice_tools.ledger.post") as mock_post:
+        with patch("fourx.tools.invoice_tools.ledger.post") as mock_post:
             self._send("post invoice-05")
             mock_post.assert_not_called()
 
@@ -585,9 +585,9 @@ class CLITests(unittest.TestCase):
         self.cli.handle_line("anything")
         self.assertTrue(entered.wait(timeout=5))
         with patch("ledger.post") as mock_post:
-            with patch("cli.approve_and_post") as mock_aap:
-                with patch("cli.decline") as mock_decline:
-                    with patch("cli.post_approved") as mock_pa:
+            with patch("fourx.cli.approve_and_post") as mock_aap:
+                with patch("fourx.cli.decline") as mock_decline:
+                    with patch("fourx.cli.post_approved") as mock_pa:
                         self.cli.handle_line("/stop")
                         mock_post.assert_not_called()
                         mock_aap.assert_not_called()
@@ -648,7 +648,7 @@ class CLITests(unittest.TestCase):
             self.assertEqual(os.environ["FOURX_TEST_KEY"], "existing")
 
     def test_format_approval_includes_amount(self) -> None:
-        from approval import ApprovalRequest
+        from fourx.finance.approval import ApprovalRequest
 
         req = ApprovalRequest(
             approval_id="apr-x",

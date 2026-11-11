@@ -9,8 +9,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from approval import get_pending_approval, list_approvals, request_approval
-from cancellation import (
+from fourx.finance.approval import get_pending_approval, list_approvals, request_approval
+from fourx.agent.cancellation import (
     CancellationToken,
     RunCancelled,
     StaleRunError,
@@ -19,14 +19,14 @@ from cancellation import (
     end_run,
     run_write,
 )
-from conversation import Conversation, Message, ToolCall
-from harness import (
+from fourx.agent.conversation import Conversation, Message, ToolCall
+from fourx.agent.harness import (
     ApprovalRequired,
     run_agent_turn,
     unmatched_tool_call_ids,
 )
-import harness as harness_mod
-from storage import ConversationStore
+import fourx.agent.harness as harness_mod
+from fourx.persistence.storage import ConversationStore
 
 
 class GateModel:
@@ -170,7 +170,7 @@ class CancellationTests(unittest.TestCase):
         self.assertEqual([m.role for m in msgs], ["user", "assistant"])
         self.assertEqual(msgs[1].content, "Hello.")
 
-    @patch("harness.list_invoices")
+    @patch("fourx.agent.harness.list_invoices")
     def test_cancel_between_two_tools(self, mock_list) -> None:
         mock_list.return_value = [{"invoice_id": "invoice-01"}]
         self._add_user("two tools")
@@ -178,7 +178,9 @@ class CancellationTests(unittest.TestCase):
         token = CancellationToken()
         call_count = {"n": 0}
 
-        real_execute = __import__("harness", fromlist=["execute_tool_call"]).execute_tool_call
+        real_execute = __import__(
+            "fourx.agent.harness", fromlist=["execute_tool_call"]
+        ).execute_tool_call
 
         def wrapping(call: ToolCall, **kwargs) -> Message:
             call_count["n"] += 1
@@ -199,7 +201,7 @@ class CancellationTests(unittest.TestCase):
                 )
             ]
         )
-        with patch("harness.execute_tool_call", side_effect=wrapping):
+        with patch("fourx.agent.harness.execute_tool_call", side_effect=wrapping):
             with self.assertRaises(RunCancelled):
                 run_agent_turn(
                     store=self.store, conversation_id="demo", model=model, cancel=token
@@ -239,7 +241,7 @@ class CancellationTests(unittest.TestCase):
             token.cancel()
             return msg
 
-        with patch("harness.execute_tool_call", side_effect=tracking):
+        with patch("fourx.agent.harness.execute_tool_call", side_effect=tracking):
             with self.assertRaises(RunCancelled):
                 run_agent_turn(
                     store=self.store,
@@ -387,7 +389,7 @@ class CancellationTests(unittest.TestCase):
         self.assertNotIn("stale", texts)
 
     @patch("ledger.entries", return_value=[])
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_pending_approval_survives_cancellation(self, mock_post, mock_entries) -> None:
         pending = request_approval(self.store, "demo", "invoice-01")
         token = CancellationToken()
@@ -409,7 +411,7 @@ class CancellationTests(unittest.TestCase):
         mock_post.assert_not_called()
 
     @patch("ledger.entries", return_value=[])
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_cancel_does_not_approve_or_decline(self, mock_post, mock_entries) -> None:
         request_approval(self.store, "demo", "invoice-01")
         token = CancellationToken()
@@ -426,7 +428,7 @@ class CancellationTests(unittest.TestCase):
         self.assertEqual(rows[0].status, "pending")
         mock_post.assert_not_called()
 
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_cancel_never_calls_ledger_post(self, mock_post) -> None:
         self._add_user("x")
         token = CancellationToken()
@@ -569,7 +571,7 @@ class CancellationTests(unittest.TestCase):
         end_run("demo", token_b)
 
     @patch("ledger.entries", return_value=[])
-    @patch("invoice_tools.ledger.post")
+    @patch("fourx.tools.invoice_tools.ledger.post")
     def test_c_superseded_before_approval_commit(self, mock_post, mock_entries) -> None:
         """Run A cannot create approval after B supersedes before protected commit."""
         self._add_user("post please")
