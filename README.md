@@ -155,8 +155,3 @@ python -m fourx -c live-smoke --db /tmp/fourx-live.db --ledger-db /tmp/fourx-liv
 - Multi-process protection requires one shared conversation DB; the stock ledger
   can still accept duplicate posts if app checks are bypassed.
 - Ambiguous incomplete tool history needs manual recovery (`RecoveryRequired`).
-
-## Reviewer access
-
-Private GitHub repo; add collaborator **`nikunj-fourx`**. Do not commit `.env`,
-`*.db`, or `.venv/`.
